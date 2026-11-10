@@ -20,7 +20,7 @@
 
     <p class="save-warning" id="save-warning" role="alert" hidden>保存に失敗しました。ブラウザの空き容量が不足している可能性があります。大事な記録は、「設定」画面の「データ」からエクスポートしてバックアップしてください。</p>
 
-    <nav class="view-nav" aria-label="画面の切り替え">
+    <nav class="view-nav view-nav--top" aria-label="画面の切り替え">
       <button type="button" class="view-nav__btn view-nav__btn--active" id="nav-today" aria-current="page">今日</button>
       <button type="button" class="view-nav__btn" id="nav-menu">メニュー</button>
       <button type="button" class="view-nav__btn" id="nav-mypage">マイページ</button>
@@ -36,7 +36,9 @@
         <ul class="guide-card__list">
           <li>やった種目のセットをタップすると記録できます。</li>
           <li>種目は「メニュー」画面で追加・変更できます。記録はこのブラウザの中にだけ保存されます。</li>
+          <li>最初に入っている6種目は、自由に追加・変更・削除できます。</li>
           <li>トレーニングする曜日や、忙しい日の短縮モードは「設定」で選べます。</li>
+          <li>マイページでは、期間の比較やカレンダーも見られます。</li>
         </ul>
         <div class="data-actions__row">
           <a class="btn" href="#menu">種目を確認する</a>
@@ -44,6 +46,18 @@
           <button type="button" class="btn btn--primary" id="guide-close">閉じる</button>
         </div>
         <p class="settings-hint">この案内は、「設定」画面の「アプリ」からいつでも表示できます。</p>
+      </section>
+
+      <!-- 開始プリセット（種目が初期状態のときだけ表示） -->
+      <section class="card start-preset" id="start-preset" aria-labelledby="start-preset-heading" hidden>
+        <h2 id="start-preset-heading">はじめ方を選ぶ</h2>
+        <p>まずは今の6種目で始めるか、軽い3種目から始めるか選べます。あとから「メニュー」画面で自由に変えられます。</p>
+        <div class="data-actions__row" id="preset-buttons">
+          <button type="button" class="btn btn--primary" id="preset-full-btn">そのまま始める（6種目）</button>
+          <button type="button" class="btn" id="preset-light-btn">ライトにする（3種目・各1セット）</button>
+        </div>
+        <p class="settings-hint" id="preset-note" hidden>ライトにしました。外した種目（ヒップリフト・背筋・つま先立ち）は、「メニュー」画面の「テンプレートから追加」や追加フォームからいつでも戻せます。</p>
+        <button type="button" class="btn btn--small" id="preset-ok-btn" hidden>わかった</button>
       </section>
 
       <!-- 今日 -->
@@ -76,6 +90,14 @@
             <span class="short-toggle__hint">オンで今日の目標は各種目1セット（今日だけの切替）。曜日ごとの自動短縮は「設定」で選べます。</span>
           </span>
         </label>
+
+        <div class="today-actions">
+          <button type="button" class="btn" id="all-done-btn">すべて完了</button>
+        </div>
+        <div class="undo-bar" id="complete-undo" hidden>
+          <span id="complete-undo-text"></span>
+          <button type="button" class="btn btn--small" id="complete-undo-btn">元に戻す</button>
+        </div>
 
         <ul class="exercise-list" id="today-list"></ul>
         <p class="empty-message" id="today-empty" hidden>種目がありません。「メニュー」画面から追加してください。</p>
@@ -130,15 +152,9 @@
       <!-- 種目の管理 -->
       <section class="card" aria-labelledby="manage-heading">
         <h2 id="manage-heading">種目の管理</h2>
-        <p class="settings-hint">「編集」から名前・メモも含めて変更できます。変更は今日以降の目標に反映されます（過去の記録は変わりません）。</p>
+        <p class="settings-hint">「編集」から名前・メモも含めて変更できます。変更は明日の目標から反映されます。今日の記録がすでにある場合は、保存するときに「今日の目標にも反映するか」を確認します（過去の記録は変わりません）。</p>
 
-        <div class="undo-bar" id="undo-bar" hidden>
-          <span id="undo-text"></span>
-          <button type="button" class="btn btn--small" id="undo-delete-btn">元に戻す</button>
-        </div>
-
-        <ul class="manage-list" id="manage-list"></ul>
-
+        <h3 class="manage-subheading">種目を追加</h3>
         <form id="add-form">
           <div class="form-grid">
             <div class="field">
@@ -146,18 +162,18 @@
               <input type="text" id="add-name" name="name" required maxlength="40" placeholder="例: スクワット">
             </div>
             <div class="field">
-              <label class="field__label" for="add-amount">数値</label>
+              <label class="field__label" for="add-amount">1セットの回数・時間</label>
               <input type="number" id="add-amount" name="amount" required min="1" max="999" value="20">
             </div>
             <div class="field">
-              <label class="field__label" for="add-unit">単位</label>
+              <label class="field__label" for="add-unit">単位（回数・秒数）</label>
               <select id="add-unit" name="unit">
                 <option value="回" selected>回</option>
                 <option value="秒">秒</option>
               </select>
             </div>
             <div class="field">
-              <label class="field__label" for="add-sets">セット数</label>
+              <label class="field__label" for="add-sets">セット数（何回繰り返すか）</label>
               <input type="number" id="add-sets" name="sets" required min="1" max="10" value="2">
             </div>
             <div class="field field--wide">
@@ -165,8 +181,29 @@
               <input type="text" id="add-note" name="note" maxlength="80" placeholder="フォームの注意など">
             </div>
           </div>
+          <p class="settings-hint" id="add-example">例: 種目 20回 × 2セット</p>
           <button type="submit" class="btn btn--primary">種目を追加</button>
         </form>
+
+        <h3 class="manage-subheading">テンプレートから追加</h3>
+        <p class="settings-hint">よく使う種目を1タップで追加できます。すでにある種目は追加できません。</p>
+        <ul class="template-list" id="template-list"></ul>
+        <p class="data-status" id="template-status" role="status"></p>
+
+        <h3 class="manage-subheading">いまの種目</h3>
+        <div class="data-actions__row bulk-controls">
+          <button type="button" class="btn btn--small" id="bulk-edit-btn">まとめて編集</button>
+          <button type="button" class="btn btn--primary btn--small" id="bulk-save-btn" hidden>まとめて保存</button>
+          <button type="button" class="btn btn--small" id="bulk-cancel-btn" hidden>キャンセル</button>
+        </div>
+        <p class="settings-hint">「まとめて編集」では、全種目の回数・単位・セット数を一覧のまま一度に変えられます。並び替えは、行の左端のハンドルをドラッグするか、「上へ／下へ」ボタンで変えられます。</p>
+
+        <div class="undo-bar" id="undo-bar" hidden>
+          <span id="undo-text"></span>
+          <button type="button" class="btn btn--small" id="undo-delete-btn">元に戻す</button>
+        </div>
+
+        <ul class="manage-list" id="manage-list"></ul>
       </section>
       </div>
 
@@ -270,6 +307,25 @@
           <p class="settings-hint">インポート時は、読み込む前のデータを自動で退避します。不正なファイルは読み込まず、今のデータのままになります。</p>
           <div class="data-actions__row">
             <button type="button" class="btn" id="restore-backup-btn" hidden>退避したデータに戻す</button>
+          </div>
+          <div class="field">
+            <span class="field__label">引き継ぎコード</span>
+            <p class="settings-hint">機種変更のとき、ファイルの代わりにコードでもデータを移せます。コードを表示してコピーし、新しい端末のこの欄に貼り付けて読み込んでください。読み込みの検証と上限は、JSONインポートと同じです。</p>
+          </div>
+          <div class="data-actions__row">
+            <button type="button" class="btn" id="transfer-show-btn">引き継ぎコードを表示</button>
+            <button type="button" class="btn" id="transfer-copy-btn">コードをコピー</button>
+          </div>
+          <div class="field">
+            <label class="field__label" for="transfer-code-out">自分のコード</label>
+            <textarea id="transfer-code-out" class="transfer-code" rows="3" readonly hidden></textarea>
+          </div>
+          <div class="field">
+            <label class="field__label" for="transfer-code-in">コードを貼り付け</label>
+            <textarea id="transfer-code-in" class="transfer-code" rows="3" placeholder="ここに引き継ぎコードを貼り付け"></textarea>
+          </div>
+          <div class="data-actions__row">
+            <button type="button" class="btn" id="transfer-load-btn">コードから読み込む</button>
           </div>
           <div class="data-actions__row">
             <button type="button" class="btn btn--danger" id="delete-all-btn">全データ削除</button>
@@ -420,6 +476,7 @@
           <li class="legend__item"><span class="legend__mark">−</span> 未完了</li>
           <li class="legend__item"><span class="legend__mark legend__mark--today">今日</span> 今日の日付（太い枠）</li>
         </ul>
+        <div id="calendar-edit"></div>
       </section>
 
       <section class="card" id="sec-extotals" aria-labelledby="ex-totals-heading">
@@ -503,11 +560,20 @@
       </div>
     </main>
 
+    <!-- スマホ幅では下部に固定表示されるナビ（広い画面では上部ナビを使う） -->
+    <nav class="view-nav view-nav--bottom" aria-label="画面の切り替え（下部）">
+      <button type="button" class="view-nav__btn view-nav__btn--active" id="nav-b-today" aria-current="page">今日</button>
+      <button type="button" class="view-nav__btn" id="nav-b-menu">メニュー</button>
+      <button type="button" class="view-nav__btn" id="nav-b-mypage">マイページ</button>
+      <button type="button" class="view-nav__btn" id="nav-b-settings">設定</button>
+    </nav>
+
     <footer class="app__footer">
       <p>データはこのブラウザの中（localStorage）にだけ保存され、外部に送信されることはありません。</p>
     </footer>
   </div>
 
+  <p class="toast" id="toast" role="status" hidden></p>
   <p class="visually-hidden" id="live-region" aria-live="polite"></p>
 
   <script src="js/main.js" defer></script>
