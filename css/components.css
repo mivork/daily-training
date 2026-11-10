@@ -8,7 +8,7 @@
 }
 
 .app__header {
-  padding: var(--space-5) 0 var(--space-4);
+  padding: var(--space-4) 0 var(--space-3);
 }
 
 .app__subtitle {
@@ -27,17 +27,17 @@
   background-color: var(--color-surface);
   border-radius: var(--radius-l);
   box-shadow: var(--shadow-card);
-  padding: var(--space-5);
-  margin-bottom: var(--space-5);
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
 }
 
 /* 今日の概要 */
 .today-summary {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-3) var(--space-5);
+  gap: var(--space-2) var(--space-5);
   align-items: baseline;
-  margin-bottom: var(--space-4);
+  margin-bottom: var(--space-3);
 }
 
 .today-summary__date {
@@ -59,13 +59,12 @@
 .advice-card {
   background-color: var(--color-primary-soft);
   border-radius: var(--radius-m);
-  padding: var(--space-3) var(--space-4);
-  margin-bottom: var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  margin-bottom: var(--space-3);
 }
 
 .advice-card__title {
   color: var(--color-primary-soft-text);
-  margin-bottom: var(--space-1);
 }
 
 .advice-card__text {
@@ -80,9 +79,20 @@
   margin-bottom: var(--space-4);
 }
 
-/* 進捗バー */
-.progress {
-  margin-bottom: var(--space-4);
+/* 進捗カード（今日の進捗＋今週の進捗を1枚に統合） */
+.progress-card {
+  background-color: var(--color-surface-alt);
+  border-radius: var(--radius-m);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-3);
+}
+
+.progress-card__texts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  align-items: baseline;
+  justify-content: space-between;
 }
 
 .progress__track {
@@ -101,7 +111,6 @@
 }
 
 .progress__text {
-  margin-top: var(--space-1);
   font-size: var(--font-size-s);
   color: var(--color-text-muted);
 }
@@ -124,7 +133,7 @@
   padding: var(--space-3) var(--space-4);
   background-color: var(--color-surface-alt);
   border-radius: var(--radius-m);
-  margin-bottom: var(--space-4);
+  margin-bottom: var(--space-3);
   cursor: pointer;
 }
 
@@ -147,31 +156,34 @@
 .exercise-list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--space-3);
 }
 
 .exercise-row {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-m);
-  padding: var(--space-4);
+  padding: var(--space-3);
 }
 
 .exercise-row__target {
   font-weight: 700;
-  margin-top: var(--space-1);
 }
 
+/* メモは1行だけ表示し、入りきらない分は省略記号にする（全文は title で確認できる） */
 .exercise-row__note {
   color: var(--color-text-muted);
   font-size: var(--font-size-s);
   margin-top: var(--space-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .exercise-row__sets {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
-  margin-top: var(--space-3);
+  margin-top: var(--space-2);
 }
 
 /* セットのチェックボタン */
@@ -272,14 +284,14 @@
 .manage-list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
-  margin-bottom: var(--space-5);
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
 }
 
 .manage-row {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-m);
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-3);
 }
 
 .manage-row__name {
@@ -447,7 +459,7 @@
 .view-nav {
   display: flex;
   gap: var(--space-2);
-  margin-bottom: var(--space-5);
+  margin-bottom: var(--space-4);
 }
 
 .view-nav__btn {
@@ -607,19 +619,25 @@
   margin-top: var(--space-3);
 }
 
-/* 今週の進捗 */
+/* 今週の進捗（進捗カードの中） */
 .week-progress {
   font-weight: 700;
-  margin-bottom: var(--space-4);
+  font-size: var(--font-size-s);
 }
 
 /* 共有 */
+.share-block {
+  background-color: var(--color-surface-alt);
+  border-radius: var(--radius-m);
+  padding: var(--space-2) var(--space-4);
+}
+
 .share-row {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-3);
   align-items: center;
-  margin-bottom: var(--space-4);
+  margin-bottom: var(--space-2);
 }
 
 /* マイページ: カレンダー */
@@ -866,11 +884,11 @@
   overflow-wrap: break-word;
 }
 
-/* ダークモードでは、明るい緑の背景に白文字だと読みにくいので濃い文字にする */
+/* ダークモードでは、明るいオレンジの背景に白文字だと読みにくいので濃い暖色の文字にする */
 [data-theme="dark"] .set-toggle--done,
 [data-theme="dark"] .btn--primary,
 [data-theme="dark"] .view-nav__btn--active {
-  color: #0c1a10;
+  color: #2b1503;
 }
 
 [data-theme="dark"] .btn--danger:hover {
@@ -927,7 +945,7 @@
 /* 設定のグループ見出し */
 .settings-group {
   font-size: var(--font-size-l);
-  margin: var(--space-5) 0 var(--space-3);
+  margin: var(--space-4) 0 var(--space-3);
 }
 
 .settings-group:first-of-type {
@@ -1029,10 +1047,51 @@
   margin-bottom: var(--space-3);
 }
 
+/* 折りたたみ（初期状態は閉。開閉状態はセッション内のみで保存しない） */
+.collapse-head {
+  margin-bottom: 0;
+}
+
+.collapse-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--touch-target);
+  padding: var(--space-1) 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius-s);
+  color: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.collapse-toggle__icon {
+  flex-shrink: 0;
+  font-size: var(--font-size-s);
+  color: var(--color-text-muted);
+  transition: transform 0.15s ease-out;
+}
+
+.advice-card .collapse-toggle__icon {
+  color: var(--color-primary-soft-text);
+}
+
+.collapse-toggle[aria-expanded="true"] .collapse-toggle__icon {
+  transform: rotate(90deg);
+}
+
+.collapse-body {
+  margin-top: var(--space-2);
+}
+
 /* 狭い画面では管理行の操作を縦に寄せる */
 @media (max-width: 34rem) {
   .card {
-    padding: var(--space-4);
+    padding: var(--space-3);
   }
 
   .manage-row__controls {
