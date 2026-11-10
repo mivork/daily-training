@@ -9,7 +9,20 @@ var STORAGE_KEYS = {
   records: 'dailyTraining.records.v1',
   settings: 'dailyTraining.settings.v1',
   rivals: 'dailyTraining.rivals.v1',
-  profile: 'dailyTraining.profile.v1'
+  profile: 'dailyTraining.profile.v1',
+  prefs: 'dailyTraining.prefs.v1',
+  backup: 'dailyTraining.backup.v1'
+};
+
+/* 書き出しJSONの形式バージョン。保存データ側にも同じ値を持つ。 */
+var SCHEMA_VERSION = 1;
+
+/* ファイル読み込み前の上限（#28）。件数の上限もここで管理する。 */
+var FILE_LIMITS = {
+  jsonBytes: 5 * 1024 * 1024,
+  imageBytes: 10 * 1024 * 1024,
+  exercisesMax: 200,
+  rivalsMax: 5
 };
 
 /* プロフィール画像: 最大256×256に縮小し、data URL の目安は約300KB。
@@ -39,7 +52,19 @@ var DEFAULT_SETTINGS = {
   timeValue: '',
   weeklyGoal: 0,
   theme: '',
-  nickname: ''
+  nickname: '',
+  cardId: ''
+};
+
+/* アプリの細かな状態（案内の表示、マイページの期間選択、最終書き出し日）。
+   データ本体とは別のキーに分けて保存する。 */
+var DEFAULT_PREFS = {
+  schemaVersion: SCHEMA_VERSION,
+  guideDismissed: false,
+  exportLastAt: '',
+  mpYear: null,
+  mpMonth: null,
+  mpWeek: ''
 };
 
 /* やる時間の時間帯ラベル。「決めていない」は予定表示に出さない。 */
@@ -51,7 +76,8 @@ var state = {
   records: {},
   settings: Object.assign({}, DEFAULT_SETTINGS),
   rivals: [],
-  profile: { image: '', bio: '' }
+  profile: { image: '', bio: '' },
+  prefs: Object.assign({}, DEFAULT_PREFS)
 };
 
 // ===== ユーティリティ =====
@@ -70,11 +96,28 @@ function loadJSON(key, fallback) {
   }
 }
 
+/* 保存の成否を追跡し、失敗したら画面上部の警告バナーで知らせる（#23）。
+   成功が続けばバナーは消す。 */
+var saveFailed = false;
+
+function updateSaveWarning() {
+  if (typeof el !== 'undefined' && el.saveWarning) {
+    el.saveWarning.hidden = !saveFailed;
+  }
+}
+
 function saveKey(key, value) {
   try {
     localStorage.setItem(key, JSON.stringify(value));
+    if (saveFailed) {
+      saveFailed = false;
+      updateSaveWarning();
+    }
+    return true;
   } catch (e) {
-    /* 保存できない環境ではそのまま続行する */
+    saveFailed = true;
+    updateSaveWarning();
+    return false;
   }
 }
 
@@ -83,6 +126,7 @@ function saveRecords() { saveKey(STORAGE_KEYS.records, state.records); }
 function saveSettings() { saveKey(STORAGE_KEYS.settings, state.settings); }
 function saveRivals() { saveKey(STORAGE_KEYS.rivals, state.rivals); }
 function saveProfile() { saveKey(STORAGE_KEYS.profile, state.profile); }
+function savePrefs() { saveKey(STORAGE_KEYS.prefs, state.prefs); }
 
 /* プロフィール（画像・紹介文）を検証して整える。
    画像は data URL の画像だけを受け付け、容量上限を超えるものは捨てる。 */
@@ -164,8 +208,31 @@ function sanitizeSettings(raw) {
     if (typeof raw.nickname === 'string') {
       s.nickname = raw.nickname.trim().slice(0, 20);
     }
+    if (typeof raw.cardId === 'string' && raw.cardId !== '') {
+      s.cardId = raw.cardId.slice(0, 64);
+    }
   }
   return s;
+}
+
+/* prefs（案内の表示状態・マイページの期間選択・最終書き出し日）を整える（#1, #16, #26）。 */
+function sanitizePrefs(raw) {
+  var p = Object.assign({}, DEFAULT_PREFS);
+  if (raw && typeof raw === 'object') {
+    p.schemaVersion = SCHEMA_VERSION;
+    p.guideDismissed = raw.guideDismissed === true;
+    if (typeof raw.exportLastAt === 'string') p.exportLastAt = raw.exportLastAt.slice(0, 40);
+    if (typeof raw.mpYear === 'number' && isFinite(raw.mpYear)) {
+      p.mpYear = Math.min(9999, Math.max(1, Math.floor(raw.mpYear)));
+    }
+    if (typeof raw.mpMonth === 'number' && isFinite(raw.mpMonth)) {
+      p.mpMonth = Math.min(11, Math.max(0, Math.floor(raw.mpMonth)));
+    }
+    if (typeof raw.mpWeek === 'string' && mondayFromWeekValue(raw.mpWeek) !== null) {
+      p.mpWeek = raw.mpWeek;
+    }
+  }
+  return p;
 }
 
 /* テーマ: 設定に保存があればそれ、無ければ端末の prefers-color-scheme に従う。 */
@@ -182,10 +249,12 @@ function resolvedTheme() {
 function applyTheme() {
   var theme = resolvedTheme();
   document.documentElement.setAttribute('data-theme', theme);
-  if (el.themeToggle) {
-    el.themeToggle.textContent = theme === 'dark' ? 'ライトモードにする' : 'ダークモードにする';
-    el.themeToggle.setAttribute('aria-pressed', theme === 'dark' ? 'true' : 'false');
-  }
+  [el.themeToggle, el.settingsThemeBtn].forEach(function (btn) {
+    if (btn) {
+      btn.textContent = theme === 'dark' ? 'ライトモードにする' : 'ダークモードにする';
+      btn.setAttribute('aria-pressed', theme === 'dark' ? 'true' : 'false');
+    }
+  });
 }
 
 // ===== 日付 =====
@@ -217,14 +286,32 @@ function defaultShortFor(date) {
   return state.settings.shortWeekdays.indexOf(date.getDay()) !== -1;
 }
 
-/* 設定の「トレーニングする曜日」に含まれる日かどうか。 */
+/* 設定の「トレーニングする曜日」に含まれる日かどうか（現在の設定でのライブ判定）。 */
 function isTrainingDay(date) {
   return state.settings.trainingWeekdays.indexOf(date.getDay()) !== -1;
 }
 
+/* 記録に保存済みの日種別（'training' / 'rest'）。無い記録は null（#24）。
+   記録を作る時点でその日の種別を固定し、後の設定変更で過去が変わらないようにする。 */
+function storedDayType(key) {
+  var record = getRecord(key);
+  if (record && (record.dayType === 'training' || record.dayType === 'rest')) {
+    return record.dayType;
+  }
+  return null;
+}
+
+/* その日がトレーニング日かどうか。保存済みの種別があればそれを使い、
+   無ければ（旧形式の記録や未記録の日）現在の設定で判定する（後方互換）。 */
+function isTrainingRecordDay(key, date) {
+  var stored = storedDayType(key);
+  if (stored !== null) return stored === 'training';
+  return isTrainingDay(date);
+}
+
 /* 日種別: 'rest'（休みの日）/ 'short'（短縮日）/ 'normal'（通常日） */
 function dayKindFor(key, date) {
-  if (!isTrainingDay(date)) return 'rest';
+  if (!isTrainingRecordDay(key, date)) return 'rest';
   return effectiveShort(key, date) ? 'short' : 'normal';
 }
 
@@ -256,34 +343,55 @@ function targetSetsFor(exercise, short) {
 
 /* その日のスナップショット（種目名・目標セット数・回数/秒数・単位）を記録に残す。
    種目を後で消したり変えたりしても、その日の履歴や集計が壊れないようにするため。
-   旧形式の記録（amounts / units が無い）もそのまま読める。 */
-function refreshSnapshot(record, short) {
-  var targets = {};
-  var names = {};
-  var amounts = {};
-  var units = {};
+   旧形式の記録（amounts / units が無い）もそのまま読める。
+   目標セット数は短縮を適用しない素のセット数（base）を保存し、短縮の適用は
+   dayStats 側で record.short を見て行う。
+   一度保存した種目の目標は上書きしない（#25）。当日あとから追加された種目だけが
+   スナップショットに加わる。 */
+function refreshSnapshot(record) {
+  if (!record.targets || typeof record.targets !== 'object') record.targets = {};
+  if (!record.names || typeof record.names !== 'object') record.names = {};
+  if (!record.amounts || typeof record.amounts !== 'object') record.amounts = {};
+  if (!record.units || typeof record.units !== 'object') record.units = {};
   state.exercises.forEach(function (ex) {
-    targets[ex.id] = targetSetsFor(ex, short);
-    names[ex.id] = ex.name;
-    amounts[ex.id] = ex.amount;
-    units[ex.id] = ex.unit;
+    if (typeof record.targets[ex.id] !== 'number') {
+      record.targets[ex.id] = ex.sets;
+      record.names[ex.id] = ex.name;
+      record.amounts[ex.id] = ex.amount;
+      record.units[ex.id] = ex.unit;
+    }
   });
-  record.targets = targets;
-  record.names = names;
-  record.amounts = amounts;
-  record.units = units;
+}
+
+/* スナップショットを現在の種目で作り直す（過去日の編集で新規に記録を作るときだけ使う）。 */
+function writeSnapshot(record, short) {
+  record.targets = {};
+  record.names = {};
+  record.amounts = {};
+  record.units = {};
+  state.exercises.forEach(function (ex) {
+    record.targets[ex.id] = ex.sets;
+    record.names[ex.id] = ex.name;
+    record.amounts[ex.id] = ex.amount;
+    record.units[ex.id] = ex.unit;
+  });
 }
 
 function ensureTodayRecord(short) {
   var key = dateKeyOf(todayDate());
   var record = getRecord(key);
   if (!record) {
-    record = { done: {}, short: short };
+    record = {
+      done: {},
+      short: short,
+      /* 記録を作る時点の日種別を固定する（#24） */
+      dayType: isTrainingDay(todayDate()) ? 'training' : 'rest'
+    };
     state.records[key] = record;
   }
   if (typeof record.done !== 'object' || record.done === null) record.done = {};
   record.short = short;
-  refreshSnapshot(record, short);
+  refreshSnapshot(record);
   return record;
 }
 
@@ -298,7 +406,11 @@ function dayStats(key) {
 
   if (record && record.targets && typeof record.targets === 'object') {
     Object.keys(record.targets).forEach(function (id) {
-      var target = toInt(record.targets[id], 0, 0, 999);
+      var baseTarget = toInt(record.targets[id], 0, 0, 999);
+      /* スナップショットの目標は素のセット数。短縮日はここで1セット相当に絞る。
+         旧形式の記録（短縮適用済みの目標が保存されている）でも、
+         min を取るため結果は変わらない。 */
+      var target = short ? Math.min(baseTarget, state.settings.shortGoalSets) : baseTarget;
       var doneRaw = record.done && typeof record.done[id] === 'number' ? record.done[id] : 0;
       var done = Math.min(doneRaw, target);
       var name = record.names && typeof record.names[id] === 'string' ? record.names[id] : '削除済みの種目';
@@ -350,13 +462,13 @@ function dayStats(key) {
 function calcStreak() {
   var streak = 0;
   var cursor = todayDate();
-  if (isTrainingDay(cursor) && !dayStats(dateKeyOf(cursor)).complete) {
+  if (isTrainingRecordDay(dateKeyOf(cursor), cursor) && !dayStats(dateKeyOf(cursor)).complete) {
     cursor.setDate(cursor.getDate() - 1);
   }
   var guard = 0;
   while (guard < 3660) {
     guard += 1;
-    if (isTrainingDay(cursor)) {
+    if (isTrainingRecordDay(dateKeyOf(cursor), cursor)) {
       if (dayStats(dateKeyOf(cursor)).complete) {
         streak += 1;
       } else {
@@ -395,7 +507,7 @@ function periodStats(start, end) {
     var key = dateKeyOf(cursor);
     if (getRecord(key)) result.hasData = true;
     var stats = dayStats(key);
-    if (isTrainingDay(cursor)) {
+    if (isTrainingRecordDay(key, cursor)) {
       result.trainingDays += 1;
       if (stats.complete) result.completeDays += 1;
     }
@@ -450,7 +562,7 @@ function weekProgressStats() {
   var remaining = 0;
   for (var i = 0; i < 7; i++) {
     var d = addDays(monday, i);
-    if (!isTrainingDay(d)) continue;
+    if (!isTrainingRecordDay(dateKeyOf(d), d)) continue;
     var complete = dayStats(dateKeyOf(d)).complete;
     if (d < today) {
       if (complete) done += 1;
@@ -506,7 +618,7 @@ function calcLongestStreak() {
   var guard = 0;
   while (cursor <= today && guard < 36600) {
     guard += 1;
-    if (isTrainingDay(cursor)) {
+    if (isTrainingRecordDay(dateKeyOf(cursor), cursor)) {
       if (dayStats(dateKeyOf(cursor)).complete) {
         current += 1;
         if (current > longest) longest = current;
@@ -525,7 +637,7 @@ function allTimeTotals() {
   var totals = { totalDays: 0, totalSets: 0, totalReps: 0 };
   Object.keys(state.records).forEach(function (key) {
     var stats = dayStats(key);
-    if (isTrainingDay(parseKey(key)) && stats.complete) totals.totalDays += 1;
+    if (isTrainingRecordDay(key, parseKey(key)) && stats.complete) totals.totalDays += 1;
     totals.totalSets += stats.totalDone;
     stats.entries.forEach(function (entry) {
       if (entry.unit === '回' && typeof entry.amount === 'number') {
@@ -566,7 +678,7 @@ function previousTrainingKey(date) {
   var cursor = new Date(date.getFullYear(), date.getMonth(), date.getDate());
   for (var i = 0; i < 30; i++) {
     cursor.setDate(cursor.getDate() - 1);
-    if (isTrainingDay(cursor)) return dateKeyOf(cursor);
+    if (isTrainingRecordDay(dateKeyOf(cursor), cursor)) return dateKeyOf(cursor);
   }
   return null;
 }
@@ -579,7 +691,7 @@ function recentTrainingStats(date, days) {
   var cursor = new Date(date.getFullYear(), date.getMonth(), date.getDate());
   for (var i = 0; i < days; i++) {
     cursor.setDate(cursor.getDate() - 1);
-    if (!isTrainingDay(cursor)) continue;
+    if (!isTrainingRecordDay(dateKeyOf(cursor), cursor)) continue;
     var key = dateKeyOf(cursor);
     if (getRecord(key)) {
       recorded += 1;
@@ -595,7 +707,7 @@ function pickAdvice() {
   var key = dateKeyOf(date);
 
   /* 1. 今日が休みの日 */
-  if (!isTrainingDay(date)) return ADVICE_TEXTS.rest;
+  if (dayKindFor(key, date) === 'rest') return ADVICE_TEXTS.rest;
 
   /* 2. 今日がすでに完了 */
   if (dayStats(key).complete) return ADVICE_TEXTS.done;
@@ -658,10 +770,26 @@ function cacheElements() {
   el.deleteAllBtn = document.getElementById('delete-all-btn');
   el.dataStatus = document.getElementById('data-status');
   el.liveRegion = document.getElementById('live-region');
+  el.saveWarning = document.getElementById('save-warning');
+  el.guideCard = document.getElementById('guide-card');
+  el.guideClose = document.getElementById('guide-close');
   el.navToday = document.getElementById('nav-today');
+  el.navMenu = document.getElementById('nav-menu');
   el.navMypage = document.getElementById('nav-mypage');
+  el.navSettings = document.getElementById('nav-settings');
   el.viewToday = document.getElementById('view-today');
+  el.viewMenu = document.getElementById('view-menu');
   el.viewMypage = document.getElementById('view-mypage');
+  el.viewSettings = document.getElementById('view-settings');
+  el.undoBar = document.getElementById('undo-bar');
+  el.undoText = document.getElementById('undo-text');
+  el.undoDeleteBtn = document.getElementById('undo-delete-btn');
+  el.settingsStatus = document.getElementById('settings-status');
+  el.lastExport = document.getElementById('last-export');
+  el.restoreBackupBtn = document.getElementById('restore-backup-btn');
+  el.gotoProfileBtn = document.getElementById('goto-profile-btn');
+  el.guideReshowBtn = document.getElementById('guide-reshow-btn');
+  el.settingsThemeBtn = document.getElementById('settings-theme-btn');
   el.mpYear = document.getElementById('mp-year');
   el.mpMonth = document.getElementById('mp-month');
   el.compareWeekPeriods = document.getElementById('compare-week-periods');
@@ -686,7 +814,6 @@ function cacheElements() {
   el.calendar = document.getElementById('calendar');
   el.exerciseTotals = document.getElementById('exercise-totals');
   el.exerciseTotalsEmpty = document.getElementById('exercise-totals-empty');
-  el.nickname = document.getElementById('nickname');
   el.cardExportBtn = document.getElementById('card-export-btn');
   el.cardCopyBtn = document.getElementById('card-copy-btn');
   el.cardStatus = document.getElementById('card-status');
@@ -732,6 +859,9 @@ function renderToday() {
   var short = effectiveShort(key, date);
   var stats = dayStats(key);
 
+  /* 初回の案内は、閉じるまで今日ビューの先頭に出す（#1） */
+  if (el.guideCard) el.guideCard.hidden = state.prefs.guideDismissed;
+
   el.todayDate.textContent = formatDateJa(date);
 
   var streak = calcStreak();
@@ -774,7 +904,14 @@ function renderToday() {
   el.todayEmpty.hidden = state.exercises.length > 0;
 
   state.exercises.forEach(function (ex) {
-    var target = targetSetsFor(ex, short);
+    /* 今日の目標は、その日のスナップショット（素のセット数）を優先する（#25）。
+       スナップショットがまだ無い種目は現在の設定から決める。 */
+    var target;
+    if (record && record.targets && typeof record.targets[ex.id] === 'number') {
+      target = short ? Math.min(record.targets[ex.id], state.settings.shortGoalSets) : record.targets[ex.id];
+    } else {
+      target = targetSetsFor(ex, short);
+    }
     var doneCount = record && record.done && typeof record.done[ex.id] === 'number' ? record.done[ex.id] : 0;
     doneCount = Math.min(doneCount, target);
 
@@ -805,12 +942,18 @@ function renderToday() {
     for (var i = 0; i < target; i++) {
       (function (index) {
         var isDone = index < doneCount;
+        /* 押せるのは「次にやるセット」と「最後に完了したセット（取り消し）」だけ（#7）。
+           飛ばし押しはできない。 */
+        var isNext = index === doneCount;
+        var isUndoable = doneCount > 0 && index === doneCount - 1;
         var btn = makeButton(
-          'set-toggle' + (isDone ? ' set-toggle--done' : ''),
+          'set-toggle' + (isDone ? ' set-toggle--done' : '') + (isNext ? ' set-toggle--next' : ''),
           (index + 1) + 'セット目',
-          ex.name + ' ' + (index + 1) + 'セット目を' + (isDone ? '未完了に戻す' : '完了にする')
+          ex.name + ' ' + (index + 1) + 'セット目を' + (isDone ? '未完了に戻す' : '完了にする') +
+            (isNext && !isDone ? '（次はこれ）' : '')
         );
         btn.setAttribute('aria-pressed', isDone ? 'true' : 'false');
+        btn.disabled = !(isNext || isUndoable);
         btn.addEventListener('click', function () {
           toggleSet(ex.id, index, short);
         });
@@ -825,6 +968,8 @@ function renderToday() {
 function toggleSet(exerciseId, setIndex, short) {
   var record = ensureTodayRecord(short);
   var current = typeof record.done[exerciseId] === 'number' ? record.done[exerciseId] : 0;
+  /* 飛ばし押しの防止（#7）: 次のセットか、最後に完了したセットの取り消しだけを受け付ける */
+  if (setIndex > current) return;
   var next = setIndex < current ? setIndex : setIndex + 1;
   record.done[exerciseId] = next;
   saveRecords();
@@ -835,6 +980,52 @@ function toggleSet(exerciseId, setIndex, short) {
 }
 
 // ===== 描画: 種目の管理 =====
+/* 編集中の種目ID（#9）。null のときは一覧表示。 */
+var editingExerciseId = null;
+/* 削除した種目の取り消し用（#10）。 */
+var lastDeleted = null;
+var undoTimer = null;
+
+function hideUndoBar() {
+  lastDeleted = null;
+  if (undoTimer) {
+    clearTimeout(undoTimer);
+    undoTimer = null;
+  }
+  if (el.undoBar) el.undoBar.hidden = true;
+}
+
+function showUndoBar(ex, index) {
+  lastDeleted = { exercise: ex, index: index };
+  if (el.undoText) el.undoText.textContent = '「' + ex.name + '」を削除しました。';
+  if (el.undoBar) el.undoBar.hidden = false;
+  if (undoTimer) clearTimeout(undoTimer);
+  undoTimer = setTimeout(hideUndoBar, 8000);
+}
+
+function deleteExercise(ex, index) {
+  if (!window.confirm('「' + ex.name + '」を削除しますか？\n過去の記録は残りますが、今日以降のメニューからは消えます。')) {
+    return;
+  }
+  state.exercises.splice(index, 1);
+  if (editingExerciseId === ex.id) editingExerciseId = null;
+  saveExercises();
+  renderAll();
+  showUndoBar(ex, index);
+  announce(ex.name + 'を削除しました');
+}
+
+function undoDelete() {
+  if (!lastDeleted) return;
+  var item = lastDeleted;
+  var at = Math.min(item.index, state.exercises.length);
+  state.exercises.splice(at, 0, item.exercise);
+  hideUndoBar();
+  saveExercises();
+  renderAll();
+  announce(item.exercise.name + 'を元に戻しました');
+}
+
 function renderManage() {
   el.manageList.textContent = '';
   state.exercises.forEach(function (ex, index) {
@@ -846,74 +1037,15 @@ function renderManage() {
     name.textContent = ex.name;
     li.appendChild(name);
 
-    var controls = document.createElement('div');
-    controls.className = 'manage-row__controls';
-
-    var amountField = document.createElement('label');
-    amountField.className = 'field field--inline';
-    var amountLabel = document.createElement('span');
-    amountLabel.textContent = '数値';
-    var amountInput = document.createElement('input');
-    amountInput.type = 'number';
-    amountInput.min = '1';
-    amountInput.max = '999';
-    amountInput.value = String(ex.amount);
-    amountInput.setAttribute('aria-label', ex.name + 'の数値');
-    amountInput.addEventListener('change', function () {
-      ex.amount = toInt(amountInput.value, ex.amount, 1, 999);
-      amountInput.value = String(ex.amount);
-      saveExercises();
-      renderToday();
-      renderHistory();
-    });
-    amountField.appendChild(amountLabel);
-    amountField.appendChild(amountInput);
-    controls.appendChild(amountField);
-
-    var unitField = document.createElement('label');
-    unitField.className = 'field field--inline';
-    var unitLabel = document.createElement('span');
-    unitLabel.textContent = '単位';
-    var unitSelect = document.createElement('select');
-    unitSelect.setAttribute('aria-label', ex.name + 'の単位');
-    ['回', '秒'].forEach(function (u) {
-      var opt = document.createElement('option');
-      opt.value = u;
-      opt.textContent = u;
-      if (ex.unit === u) opt.selected = true;
-      unitSelect.appendChild(opt);
-    });
-    unitSelect.addEventListener('change', function () {
-      ex.unit = unitSelect.value === '秒' ? '秒' : '回';
-      saveExercises();
-      renderToday();
-    });
-    unitField.appendChild(unitLabel);
-    unitField.appendChild(unitSelect);
-    controls.appendChild(unitField);
-
-    var setsField = document.createElement('label');
-    setsField.className = 'field field--inline';
-    var setsLabel = document.createElement('span');
-    setsLabel.textContent = 'セット数';
-    var setsInput = document.createElement('input');
-    setsInput.type = 'number';
-    setsInput.min = '1';
-    setsInput.max = '10';
-    setsInput.value = String(ex.sets);
-    setsInput.setAttribute('aria-label', ex.name + 'のセット数');
-    setsInput.addEventListener('change', function () {
-      ex.sets = toInt(setsInput.value, ex.sets, 1, 10);
-      setsInput.value = String(ex.sets);
-      saveExercises();
-      renderToday();
-      renderHistory();
-    });
-    setsField.appendChild(setsLabel);
-    setsField.appendChild(setsInput);
-    controls.appendChild(setsField);
-
-    li.appendChild(controls);
+    if (editingExerciseId === ex.id) {
+      li.appendChild(buildExerciseEditForm(ex, index));
+    } else {
+      var summary = document.createElement('p');
+      summary.className = 'manage-row__summary';
+      summary.textContent = ex.amount + ex.unit + ' × ' + ex.sets + 'セット' +
+        (ex.note ? '（' + ex.note + '）' : '');
+      li.appendChild(summary);
+    }
 
     var actions = document.createElement('div');
     actions.className = 'manage-row__actions';
@@ -928,18 +1060,129 @@ function renderManage() {
     downBtn.addEventListener('click', function () { moveExercise(index, 1); });
     actions.appendChild(downBtn);
 
-    var delBtn = makeButton('btn btn--small btn--danger', '削除', ex.name + 'を削除');
-    delBtn.addEventListener('click', function () {
-      state.exercises.splice(index, 1);
-      saveExercises();
-      renderAll();
-      announce(ex.name + 'を削除しました');
-    });
+    if (editingExerciseId !== ex.id) {
+      var editBtn = makeButton('btn btn--small', '編集', ex.name + 'を編集');
+      editBtn.addEventListener('click', function () {
+        editingExerciseId = ex.id;
+        renderManage();
+      });
+      actions.appendChild(editBtn);
+    }
+
+    var delBtn = makeButton('btn btn--small btn--danger manage-row__delete', '削除', ex.name + 'を削除');
+    delBtn.addEventListener('click', function () { deleteExercise(ex, index); });
     actions.appendChild(delBtn);
 
     li.appendChild(actions);
     el.manageList.appendChild(li);
   });
+}
+
+/* 種目の編集フォーム（#9）: 名前・数値・単位・セット数・メモをまとめて編集し、
+   保存／キャンセルで確定する。即時の数値入力は廃止した。 */
+function buildExerciseEditForm(ex, index) {
+  var form = document.createElement('form');
+  form.className = 'edit-form';
+
+  var grid = document.createElement('div');
+  grid.className = 'form-grid';
+
+  var fieldSeq = 0;
+  function addField(labelText, input, wide) {
+    fieldSeq += 1;
+    var field = document.createElement('div');
+    field.className = 'field' + (wide ? ' field--wide' : '');
+    var label = document.createElement('label');
+    label.className = 'field__label';
+    label.textContent = labelText;
+    input.id = 'edit-field-' + ex.id + '-' + fieldSeq;
+    label.htmlFor = input.id;
+    field.appendChild(label);
+    field.appendChild(input);
+    grid.appendChild(field);
+    return input;
+  }
+
+  var nameInput = document.createElement('input');
+  nameInput.type = 'text';
+  nameInput.required = true;
+  nameInput.maxLength = 40;
+  nameInput.value = ex.name;
+  addField('名前', nameInput, false);
+
+  var amountInput = document.createElement('input');
+  amountInput.type = 'number';
+  amountInput.min = '1';
+  amountInput.max = '999';
+  amountInput.required = true;
+  amountInput.value = String(ex.amount);
+  addField('数値', amountInput, false);
+
+  var unitSelect = document.createElement('select');
+  ['回', '秒'].forEach(function (u) {
+    var opt = document.createElement('option');
+    opt.value = u;
+    opt.textContent = u;
+    if (ex.unit === u) opt.selected = true;
+    unitSelect.appendChild(opt);
+  });
+  addField('単位', unitSelect, false);
+
+  var setsInput = document.createElement('input');
+  setsInput.type = 'number';
+  setsInput.min = '1';
+  setsInput.max = '10';
+  setsInput.required = true;
+  setsInput.value = String(ex.sets);
+  addField('セット数', setsInput, false);
+
+  var noteInput = document.createElement('input');
+  noteInput.type = 'text';
+  noteInput.maxLength = 80;
+  noteInput.value = ex.note;
+  addField('メモ（任意）', noteInput, true);
+
+  form.appendChild(grid);
+
+  var actions = document.createElement('div');
+  actions.className = 'data-actions__row';
+  var saveBtn = document.createElement('button');
+  saveBtn.type = 'submit';
+  saveBtn.className = 'btn btn--primary btn--small';
+  saveBtn.textContent = '保存';
+  actions.appendChild(saveBtn);
+  var cancelBtn = makeButton('btn btn--small', 'キャンセル', ex.name + 'の編集をやめる');
+  cancelBtn.addEventListener('click', function () {
+    editingExerciseId = null;
+    renderManage();
+  });
+  actions.appendChild(cancelBtn);
+  form.appendChild(actions);
+
+  form.addEventListener('submit', function (event) {
+    event.preventDefault();
+    var cleaned = sanitizeExercise({
+      id: ex.id,
+      name: nameInput.value,
+      amount: amountInput.value,
+      unit: unitSelect.value,
+      sets: setsInput.value,
+      note: noteInput.value.trim()
+    });
+    if (!cleaned) {
+      announce('名前を入力してください');
+      return;
+    }
+    state.exercises[index] = cleaned;
+    editingExerciseId = null;
+    saveExercises();
+    renderManage();
+    renderToday();
+    renderHistory();
+    announce(cleaned.name + 'を保存しました');
+  });
+
+  return form;
 }
 
 function moveExercise(index, delta) {
@@ -954,11 +1197,14 @@ function moveExercise(index, delta) {
 }
 
 // ===== 描画: 履歴 =====
+/* 編集中の履歴の日付キー（#8）。null のときは通常表示。 */
+var editingHistoryKey = null;
+
 function renderHistory() {
   /* 累計の完了日数は、トレーニングの日の完了だけを数える */
   var totalComplete = 0;
   Object.keys(state.records).forEach(function (key) {
-    if (isTrainingDay(parseKey(key)) && dayStats(key).complete) totalComplete += 1;
+    if (isTrainingRecordDay(key, parseKey(key)) && dayStats(key).complete) totalComplete += 1;
   });
   el.historyTotal.textContent = '累計の完了日数: ' + totalComplete + '日';
 
@@ -1006,8 +1252,95 @@ function renderHistory() {
       li.appendChild(detail);
     }
 
+    /* 記録の編集（#8）: 目標のある種目が1つでもある日に「編集」を出す */
+    var hasEditable = stats.entries.some(function (e) { return e.target > 0; });
+    if (editingHistoryKey === key) {
+      li.appendChild(buildHistoryEditForm(key, date, stats));
+    } else if (hasEditable) {
+      var editBtn = makeButton('btn btn--small', '編集', formatDateJa(date) + 'の記録を編集');
+      (function (k) {
+        editBtn.addEventListener('click', function () {
+          editingHistoryKey = k;
+          renderHistory();
+        });
+      })(key);
+      li.appendChild(editBtn);
+    }
+
     el.historyList.appendChild(li);
   }
+}
+
+/* 過去日の記録編集フォーム（#8）: その日のスナップショットをもとに、
+   各種目の完了セット数を変更できる。 */
+function buildHistoryEditForm(key, date, stats) {
+  var wrap = document.createElement('div');
+  wrap.className = 'history-edit';
+
+  var inputs = {};
+  stats.entries.forEach(function (entry) {
+    if (entry.target <= 0) return;
+    var row = document.createElement('div');
+    row.className = 'history-edit__row';
+    var nameEl = document.createElement('span');
+    nameEl.className = 'history-edit__name';
+    nameEl.textContent = entry.name;
+    row.appendChild(nameEl);
+    var input = document.createElement('input');
+    input.type = 'number';
+    input.min = '0';
+    input.max = String(entry.target);
+    input.value = String(entry.done);
+    input.setAttribute('aria-label', entry.name + 'の完了セット数（目標' + entry.target + 'セット）');
+    row.appendChild(input);
+    var targetEl = document.createElement('span');
+    targetEl.textContent = '/ ' + entry.target + 'セット';
+    row.appendChild(targetEl);
+    inputs[entry.id] = input;
+    wrap.appendChild(row);
+  });
+
+  var actions = document.createElement('div');
+  actions.className = 'data-actions__row';
+  var saveBtn = makeButton('btn btn--primary btn--small', '保存', formatDateJa(date) + 'の記録を保存');
+  saveBtn.addEventListener('click', function () {
+    saveHistoryEdit(key, date, stats, inputs);
+  });
+  actions.appendChild(saveBtn);
+  var cancelBtn = makeButton('btn btn--small', 'キャンセル', '編集をやめる');
+  cancelBtn.addEventListener('click', function () {
+    editingHistoryKey = null;
+    renderHistory();
+  });
+  actions.appendChild(cancelBtn);
+  wrap.appendChild(actions);
+  return wrap;
+}
+
+function saveHistoryEdit(key, date, stats, inputs) {
+  var record = getRecord(key);
+  if (!record) {
+    /* 記録が無い日に付け足す場合は、その日の種別を固定して新規作成する */
+    record = {
+      done: {},
+      short: stats.short,
+      dayType: isTrainingDay(date) ? 'training' : 'rest'
+    };
+    state.records[key] = record;
+    writeSnapshot(record, stats.short);
+  }
+  if (typeof record.done !== 'object' || record.done === null) record.done = {};
+  refreshSnapshot(record);
+  Object.keys(inputs).forEach(function (id) {
+    var entry = null;
+    stats.entries.forEach(function (e) { if (e.id === id) entry = e; });
+    var target = entry ? entry.target : 0;
+    record.done[id] = toInt(inputs[id].value, 0, 0, target);
+  });
+  editingHistoryKey = null;
+  saveRecords();
+  renderAll();
+  announce(formatDateJa(date) + 'の記録を保存しました');
 }
 
 // ===== 描画: 設定 =====
@@ -1027,14 +1360,74 @@ function renderSettings() {
   if (el.timeSlot) el.timeSlot.value = state.settings.timeSlot;
   if (el.timeValue) el.timeValue.value = state.settings.timeValue;
   if (el.weeklyGoal) el.weeklyGoal.value = String(state.settings.weeklyGoal);
-  if (el.nickname) el.nickname.value = state.settings.nickname;
+  /* 最後に書き出した日（#26）と、退避データの有無 */
+  if (el.lastExport) {
+    el.lastExport.textContent = state.prefs.exportLastAt !== ''
+      ? '最後に書き出した日: ' + state.prefs.exportLastAt
+      : 'まだ書き出していません。';
+  }
+  if (el.restoreBackupBtn) {
+    el.restoreBackupBtn.hidden = !hasBackup();
+  }
+}
+
+/* 設定を変えたときに「保存しました」を短時間出す（#13）。 */
+var savedNoteTimer = null;
+function notifySaved() {
+  if (!el.settingsStatus) return;
+  el.settingsStatus.textContent = '保存しました';
+  if (savedNoteTimer) clearTimeout(savedNoteTimer);
+  savedNoteTimer = setTimeout(function () {
+    if (el.settingsStatus) el.settingsStatus.textContent = '';
+    savedNoteTimer = null;
+  }, 2500);
+}
+
+/* インポート前に退避したデータがあるか（#26）。 */
+function hasBackup() {
+  try {
+    return localStorage.getItem(STORAGE_KEYS.backup) !== null;
+  } catch (e) {
+    return false;
+  }
+}
+
+/* 現在のデータを、インポート前の退避用キーに保存する（#26）。 */
+function stashBackup() {
+  try {
+    localStorage.setItem(STORAGE_KEYS.backup, JSON.stringify({
+      schemaVersion: SCHEMA_VERSION,
+      exercises: state.exercises,
+      records: state.records,
+      settings: state.settings,
+      profile: state.profile,
+      rivals: state.rivals
+    }));
+    return true;
+  } catch (e) {
+    return false;
+  }
 }
 
 // ===== 描画: マイページ =====
-/* 期間選択の状態。初期値は今の年・今の月。永続化はせず、
-   ページを開くたびに今の年・月に戻る。 */
+/* 期間選択の状態。初期値は prefs に保存された前回の選択（#16）、
+   無ければ今の年・月・週。 */
 var mypageSel = { year: null, month: null, weekMonday: null };
 var currentView = 'today';
+
+function initMypageSel() {
+  var today = todayDate();
+  mypageSel.year = typeof state.prefs.mpYear === 'number' ? state.prefs.mpYear : today.getFullYear();
+  mypageSel.month = typeof state.prefs.mpMonth === 'number' ? state.prefs.mpMonth : today.getMonth();
+  mypageSel.weekMonday = state.prefs.mpWeek !== '' ? mondayFromWeekValue(state.prefs.mpWeek) : null;
+}
+
+function persistMypageSel() {
+  state.prefs.mpYear = mypageSel.year;
+  state.prefs.mpMonth = mypageSel.month;
+  state.prefs.mpWeek = mypageSel.weekMonday ? isoWeekValue(mypageSel.weekMonday) : '';
+  savePrefs();
+}
 
 function formatShortDate(date) {
   return (date.getMonth() + 1) + '月' + date.getDate() + '日';
@@ -1289,6 +1682,7 @@ function buildOwnCard() {
   return {
     type: 'daily-training-card',
     version: 1,
+    cardId: state.settings.cardId,
     nickname: displayNickname(),
     bio: state.profile.bio,
     image: state.profile.image !== '' ? state.profile.image : null,
@@ -1309,6 +1703,8 @@ function sanitizeCard(raw) {
   return {
     type: 'daily-training-card',
     version: 1,
+    /* カード固有ID（#18）。無い旧形式カードでは '' になり、照合はニックネームで行う */
+    cardId: typeof raw.cardId === 'string' ? raw.cardId.slice(0, 64) : '',
     nickname: typeof raw.nickname === 'string' && raw.nickname.trim() !== '' ? raw.nickname.trim().slice(0, 20) : '友達',
     /* 紹介文と画像は任意項目。無い旧形式カードも取り込めるようにする */
     bio: typeof raw.bio === 'string' ? raw.bio.slice(0, PROFILE_BIO_MAX) : '',
@@ -1324,7 +1720,162 @@ function sanitizeCard(raw) {
   };
 }
 
-/* 「友達と競争」セクションの描画: 勝敗サマリー、比較表、友達リスト */
+/* 記録の日付キーとして正しいか（形式と実在する日付か） */
+function isValidDateKey(key) {
+  if (typeof key !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(key)) return false;
+  var parts = key.split('-');
+  var y = Number(parts[0]);
+  var m = Number(parts[1]);
+  var d = Number(parts[2]);
+  if (m < 1 || m > 12 || d < 1 || d > 31) return false;
+  var date = new Date(y, m - 1, d);
+  return date.getFullYear() === y && date.getMonth() === m - 1 && date.getDate() === d;
+}
+
+function isPlainObject(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/* インポートするデータ全体を、読み込む前に検証する（#22, #27, #28）。
+   問題があれば { ok: false, error: 理由 } を返し、その場合は読み込まない。
+   問題がなければ整形済みのデータ { ok: true, data } を返す。
+   整形には既存の sanitize 系を使うが、検証はそれより厳しく
+   「型が違う・範囲外」を落とす。 */
+function validateImportData(parsed) {
+  function fail(message) { return { ok: false, error: message }; }
+
+  if (!isPlainObject(parsed)) {
+    return fail('データの形式が違います（JSONのオブジェクトではありません）。');
+  }
+  if (parsed.schemaVersion !== undefined) {
+    if (typeof parsed.schemaVersion !== 'number' || !isFinite(parsed.schemaVersion)) {
+      return fail('schemaVersion の形式が違います。');
+    }
+    if (parsed.schemaVersion > SCHEMA_VERSION) {
+      return fail('このファイルは新しい形式（schemaVersion ' + parsed.schemaVersion +
+        '）で作られています。このアプリ（schemaVersion ' + SCHEMA_VERSION + '）では読み込めません。');
+    }
+  }
+
+  /* exercises: 配列で、各要素に名前と数値があること */
+  if (!Array.isArray(parsed.exercises)) {
+    return fail('exercises が配列ではありません。');
+  }
+  if (parsed.exercises.length > FILE_LIMITS.exercisesMax) {
+    return fail('種目が多すぎます（最大' + FILE_LIMITS.exercisesMax + '件）。');
+  }
+  for (var i = 0; i < parsed.exercises.length; i++) {
+    var rawEx = parsed.exercises[i];
+    if (!isPlainObject(rawEx)) return fail('種目 ' + (i + 1) + ' 件目の形式が違います。');
+    if (typeof rawEx.name !== 'string' || rawEx.name.trim() === '') {
+      return fail('種目 ' + (i + 1) + ' 件目に名前がありません。');
+    }
+    if (typeof rawEx.amount !== 'number' || !isFinite(rawEx.amount)) {
+      return fail('種目「' + rawEx.name + '」の数値が正しくありません。');
+    }
+    if (rawEx.unit !== undefined && rawEx.unit !== '回' && rawEx.unit !== '秒') {
+      return fail('種目「' + rawEx.name + '」の単位が正しくありません。');
+    }
+    if (rawEx.sets !== undefined && (typeof rawEx.sets !== 'number' || !isFinite(rawEx.sets))) {
+      return fail('種目「' + rawEx.name + '」のセット数が正しくありません。');
+    }
+    if (rawEx.note !== undefined && typeof rawEx.note !== 'string') {
+      return fail('種目「' + rawEx.name + '」のメモの形式が違います。');
+    }
+    if (rawEx.id !== undefined && typeof rawEx.id !== 'string') {
+      return fail('種目「' + rawEx.name + '」のIDの形式が違います。');
+    }
+  }
+
+  /* records: 日付キーのオブジェクトで、完了セット数が範囲内であること */
+  if (!isPlainObject(parsed.records)) {
+    return fail('records がオブジェクトではありません。');
+  }
+  var recordKeys = Object.keys(parsed.records);
+  for (var r = 0; r < recordKeys.length; r++) {
+    var key = recordKeys[r];
+    if (!isValidDateKey(key)) {
+      return fail('記録の日付「' + key + '」の形式が正しくありません。');
+    }
+    var rec = parsed.records[key];
+    if (!isPlainObject(rec)) return fail(key + ' の記録の形式が違います。');
+    if (rec.done !== undefined) {
+      if (!isPlainObject(rec.done)) return fail(key + ' の完了記録の形式が違います。');
+      var doneIds = Object.keys(rec.done);
+      for (var d = 0; d < doneIds.length; d++) {
+        var dv = rec.done[doneIds[d]];
+        if (typeof dv !== 'number' || !isFinite(dv) || dv < 0 || dv > 999 || Math.floor(dv) !== dv) {
+          return fail(key + ' の完了セット数が範囲外です。');
+        }
+      }
+    }
+    if (rec.short !== undefined && typeof rec.short !== 'boolean') {
+      return fail(key + ' の短縮フラグの形式が違います。');
+    }
+    if (rec.dayType !== undefined && rec.dayType !== 'training' && rec.dayType !== 'rest') {
+      return fail(key + ' の日種別の形式が違います。');
+    }
+    var snapFields = ['targets', 'names', 'amounts', 'units'];
+    for (var s = 0; s < snapFields.length; s++) {
+      if (rec[snapFields[s]] !== undefined && !isPlainObject(rec[snapFields[s]])) {
+        return fail(key + ' の ' + snapFields[s] + ' の形式が違います。');
+      }
+    }
+  }
+
+  /* settings / profile / rivals: 型の検証 */
+  if (parsed.settings !== undefined && !isPlainObject(parsed.settings)) {
+    return fail('settings の形式が違います。');
+  }
+  if (parsed.profile !== undefined) {
+    if (!isPlainObject(parsed.profile)) return fail('profile の形式が違います。');
+    if (parsed.profile.image !== undefined &&
+        (typeof parsed.profile.image !== 'string' || parsed.profile.image.length > PROFILE_IMAGE_MAX_LENGTH ||
+         (parsed.profile.image !== '' && parsed.profile.image.indexOf('data:image/') !== 0))) {
+      return fail('プロフィール画像の形式が正しくありません。');
+    }
+    if (parsed.profile.bio !== undefined && typeof parsed.profile.bio !== 'string') {
+      return fail('紹介文の形式が違います。');
+    }
+  }
+  if (parsed.rivals !== undefined) {
+    if (!Array.isArray(parsed.rivals)) return fail('rivals の形式が違います。');
+    if (parsed.rivals.length > FILE_LIMITS.rivalsMax) {
+      return fail('友達のカードが多すぎます（最大' + FILE_LIMITS.rivalsMax + '人）。');
+    }
+    for (var v = 0; v < parsed.rivals.length; v++) {
+      if (!sanitizeCard(parsed.rivals[v])) {
+        return fail('友達のカード ' + (v + 1) + ' 件目の形式が正しくありません。');
+      }
+    }
+  }
+
+  /* 検証を通ったので、既存の sanitize で整形する */
+  var exercises = [];
+  parsed.exercises.forEach(function (raw) {
+    var ex = sanitizeExercise(raw);
+    if (ex) exercises.push(ex);
+  });
+  var rivals = null;
+  if (parsed.rivals !== undefined) {
+    rivals = [];
+    parsed.rivals.forEach(function (raw) {
+      var card = sanitizeCard(raw);
+      if (card) rivals.push(card);
+    });
+  }
+  return {
+    ok: true,
+    data: {
+      exercises: exercises,
+      records: clone(parsed.records),
+      settings: sanitizeSettings(parsed.settings),
+      /* プロフィール・友達が無い旧形式の書き出しでは null（＝今のものを保持） */
+      profile: parsed.profile !== undefined ? sanitizeProfile(parsed.profile) : null,
+      rivals: rivals
+    }
+  };
+}
 function renderRivals() {
   var own = buildOwnCard();
   var people = [own].concat(state.rivals);
@@ -1536,24 +2087,26 @@ function renderExerciseTotals() {
   });
 }
 
-/* ビュー切替: 「今日」と「マイページ」。URLハッシュ #mypage でもマイページが開く。 */
+/* ビュー切替: 「今日」「メニュー」「マイページ」「設定」の4つ（#2）。
+   URLハッシュ（#menu など）でも開ける。 */
+var VIEW_NAMES = ['today', 'menu', 'mypage', 'settings'];
+
 function showView(view) {
-  currentView = view === 'mypage' ? 'mypage' : 'today';
-  var isMypage = currentView === 'mypage';
-  el.viewToday.hidden = isMypage;
-  el.viewMypage.hidden = !isMypage;
-  el.navToday.classList.toggle('view-nav__btn--active', !isMypage);
-  el.navMypage.classList.toggle('view-nav__btn--active', isMypage);
-  if (isMypage) {
-    el.navMypage.setAttribute('aria-current', 'page');
-    el.navToday.removeAttribute('aria-current');
-    renderMypage();
-  } else {
-    el.navToday.setAttribute('aria-current', 'page');
-    el.navMypage.removeAttribute('aria-current');
-  }
+  currentView = VIEW_NAMES.indexOf(view) !== -1 ? view : 'today';
+  var views = { today: el.viewToday, menu: el.viewMenu, mypage: el.viewMypage, settings: el.viewSettings };
+  var navs = { today: el.navToday, menu: el.navMenu, mypage: el.navMypage, settings: el.navSettings };
+  VIEW_NAMES.forEach(function (name) {
+    var isActive = name === currentView;
+    if (views[name]) views[name].hidden = !isActive;
+    if (navs[name]) {
+      navs[name].classList.toggle('view-nav__btn--active', isActive);
+      if (isActive) navs[name].setAttribute('aria-current', 'page');
+      else navs[name].removeAttribute('aria-current');
+    }
+  });
+  if (currentView === 'mypage') renderMypage();
   try {
-    history.replaceState(null, '', isMypage ? '#mypage' : '#today');
+    history.replaceState(null, '', '#' + currentView);
   } catch (e) { /* ハッシュ更新ができなくても表示は切り替える */ }
 }
 
@@ -1567,48 +2120,88 @@ function renderAll() {
 
 // ===== イベント =====
 function initEvents() {
-  el.navToday.addEventListener('click', function () {
-    showView('today');
-    announce('今日の画面を表示しました');
-  });
-
-  el.navMypage.addEventListener('click', function () {
-    showView('mypage');
-    announce('マイページを表示しました');
+  var navLabels = { today: '今日', menu: 'メニュー', mypage: 'マイページ', settings: '設定' };
+  var navEls = { today: el.navToday, menu: el.navMenu, mypage: el.navMypage, settings: el.navSettings };
+  VIEW_NAMES.forEach(function (name) {
+    if (!navEls[name]) return;
+    navEls[name].addEventListener('click', function () {
+      showView(name);
+      announce(navLabels[name] + 'の画面を表示しました');
+    });
   });
 
   window.addEventListener('hashchange', function () {
-    var target = window.location.hash === '#mypage' ? 'mypage' : 'today';
-    if (target !== currentView) showView(target);
+    var hash = window.location.hash.replace('#', '');
+    /* ビュー名のハッシュだけをビュー切替として扱う。
+       ページ内リンク（#sec-xxx など）は通常のアンカーとして動かす。 */
+    if (VIEW_NAMES.indexOf(hash) !== -1 && hash !== currentView) showView(hash);
   });
+
+  /* 初回の案内（#1）: 閉じる／設定から再表示 */
+  if (el.guideClose) {
+    el.guideClose.addEventListener('click', function () {
+      state.prefs.guideDismissed = true;
+      savePrefs();
+      renderToday();
+      announce('案内を閉じました');
+    });
+  }
+  if (el.guideReshowBtn) {
+    el.guideReshowBtn.addEventListener('click', function () {
+      state.prefs.guideDismissed = false;
+      savePrefs();
+      showView('today');
+      renderToday();
+      announce('初回の案内を表示しました');
+    });
+  }
+
+  /* ニックネームはプロフィールに一本化（#20）: 設定からはプロフィールへ誘導する */
+  if (el.gotoProfileBtn) {
+    el.gotoProfileBtn.addEventListener('click', function () {
+      showView('mypage');
+      if (el.profileNickname) el.profileNickname.focus();
+    });
+  }
+
+  if (el.undoDeleteBtn) {
+    el.undoDeleteBtn.addEventListener('click', undoDelete);
+  }
 
   el.mpYear.addEventListener('change', function () {
     mypageSel.year = toInt(el.mpYear.value, todayDate().getFullYear(), 1, 9999);
+    persistMypageSel();
     renderMypage();
   });
 
   el.mpMonth.addEventListener('change', function () {
     mypageSel.month = toInt(el.mpMonth.value, todayDate().getMonth(), 0, 11);
+    persistMypageSel();
     renderMypage();
   });
 
   el.mpWeek.addEventListener('change', function () {
     /* 値が読めない環境では null になり、今週として扱われる */
     mypageSel.weekMonday = mondayFromWeekValue(el.mpWeek.value);
+    persistMypageSel();
     renderMypage();
   });
 
-  el.themeToggle.addEventListener('click', function () {
+  function toggleTheme() {
     state.settings.theme = resolvedTheme() === 'dark' ? 'light' : 'dark';
     saveSettings();
     applyTheme();
+    notifySaved();
     announce(state.settings.theme === 'dark' ? 'ダークモードにしました' : 'ライトモードにしました');
-  });
+  }
+  el.themeToggle.addEventListener('click', toggleTheme);
+  if (el.settingsThemeBtn) el.settingsThemeBtn.addEventListener('click', toggleTheme);
 
   el.weeklyGoal.addEventListener('change', function () {
     state.settings.weeklyGoal = toInt(el.weeklyGoal.value, 0, 0, 7);
     el.weeklyGoal.value = String(state.settings.weeklyGoal);
     saveSettings();
+    notifySaved();
     renderToday();
     announce('1週間の目標を変更しました');
   });
@@ -1633,6 +2226,17 @@ function initEvents() {
   el.profileImageFile.addEventListener('change', function () {
     var file = el.profileImageFile.files && el.profileImageFile.files[0];
     if (!file) return;
+    /* 読み込み前の上限チェック（#28）: 巨大なファイルを読み込まない */
+    if (file.size > FILE_LIMITS.imageBytes) {
+      el.profileStatus.textContent = '画像ファイルが大きすぎます（10MBまで）。もう少し小さい画像を選んでください。';
+      el.profileImageFile.value = '';
+      return;
+    }
+    if (file.type && file.type.indexOf('image/') !== 0) {
+      el.profileStatus.textContent = '画像ファイルを選んでください。';
+      el.profileImageFile.value = '';
+      return;
+    }
     processProfileImage(file, function (dataUrl, errorMessage) {
       if (errorMessage) {
         el.profileStatus.textContent = errorMessage;
@@ -1653,14 +2257,6 @@ function initEvents() {
     renderProfile();
     el.profileStatus.textContent = 'プロフィール画像を削除しました。';
     announce('プロフィール画像を削除しました');
-  });
-
-  el.nickname.addEventListener('change', function () {
-    state.settings.nickname = el.nickname.value.trim().slice(0, 20);
-    el.nickname.value = state.settings.nickname;
-    saveSettings();
-    if (currentView === 'mypage') renderMypage();
-    announce('ニックネームを変更しました');
   });
 
   el.cardExportBtn.addEventListener('click', function () {
@@ -1694,6 +2290,12 @@ function initEvents() {
   el.rivalFile.addEventListener('change', function () {
     var file = el.rivalFile.files && el.rivalFile.files[0];
     if (!file) return;
+    /* 読み込み前の上限チェック（#28） */
+    if (file.size > FILE_LIMITS.jsonBytes) {
+      el.rivalStatus.textContent = 'ファイルが大きすぎます（5MBまで）。対戦カードのJSONか確認してください。';
+      el.rivalFile.value = '';
+      return;
+    }
     var reader = new FileReader();
     reader.onload = function () {
       var card = null;
@@ -1705,10 +2307,19 @@ function initEvents() {
       if (!card) {
         el.rivalStatus.textContent = '取り込めませんでした。対戦カードのJSONファイルか確認してください。';
       } else {
+        /* 照合はカード固有ID（cardId）を優先し、無い旧形式カードは
+           ニックネームで照合する（#18）。 */
         var existingIndex = -1;
-        state.rivals.forEach(function (r, i) {
-          if (r.nickname === card.nickname) existingIndex = i;
-        });
+        if (card.cardId !== '') {
+          state.rivals.forEach(function (r, i) {
+            if (r.cardId !== '' && r.cardId === card.cardId) existingIndex = i;
+          });
+        }
+        if (existingIndex === -1) {
+          state.rivals.forEach(function (r, i) {
+            if (r.nickname === card.nickname) existingIndex = i;
+          });
+        }
         if (existingIndex >= 0) {
           state.rivals[existingIndex] = card;
           saveRivals();
@@ -1757,7 +2368,10 @@ function initEvents() {
     saveRecords();
     renderToday();
     renderHistory();
-    announce(short ? '短縮モードをオンにしました' : '短縮モードをオフにしました');
+    /* 短縮の影響を状態メッセージでも知らせる（#11） */
+    announce(short
+      ? '短縮モードをオンにしました。今日の目標は各種目' + state.settings.shortGoalSets + 'セットになります'
+      : '短縮モードをオフにしました。今日の目標は通常に戻ります');
   });
 
   el.shortDays.addEventListener('change', function () {
@@ -1767,6 +2381,7 @@ function initEvents() {
     });
     state.settings.shortWeekdays = selected;
     saveSettings();
+    notifySaved();
     /* 今日の記録がまだ無い場合は初期値として反映される。
        記録がある場合は、その日の保存値（手動トグル）が優先される。 */
     renderToday();
@@ -1777,8 +2392,16 @@ function initEvents() {
     el.trainingDays.querySelectorAll('input[name="training-day"]').forEach(function (box) {
       if (box.checked) selected.push(Number(box.value));
     });
+    if (selected.length === 0) {
+      /* トレーニング日が0日になる操作は確認する（#12）。キャンセルでチェックを戻す。 */
+      if (!window.confirm('トレーニング日が0日になります。よろしいですか？')) {
+        renderSettings();
+        return;
+      }
+    }
     state.settings.trainingWeekdays = selected;
     saveSettings();
+    notifySaved();
     /* 日種別が変わるため、今日・履歴・アドバイスをまとめて描き直す */
     renderToday();
     renderHistory();
@@ -1789,6 +2412,7 @@ function initEvents() {
     state.settings.timeSlot = el.timeSlot.value;
     state.settings = sanitizeSettings(state.settings);
     saveSettings();
+    notifySaved();
     renderToday();
   });
 
@@ -1797,6 +2421,7 @@ function initEvents() {
     state.settings = sanitizeSettings(state.settings);
     el.timeValue.value = state.settings.timeValue;
     saveSettings();
+    notifySaved();
     renderToday();
   });
 
@@ -1823,10 +2448,14 @@ function initEvents() {
 
   el.exportBtn.addEventListener('click', function () {
     var payload = {
+      app: 'daily-training',
+      schemaVersion: SCHEMA_VERSION,
+      exportedAt: formatDateJa(todayDate()),
       exercises: state.exercises,
       records: state.records,
       settings: state.settings,
-      profile: state.profile
+      profile: state.profile,
+      rivals: state.rivals
     };
     var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     var url = URL.createObjectURL(blob);
@@ -1837,43 +2466,91 @@ function initEvents() {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+    /* 最後に書き出した日を記録する（#26） */
+    state.prefs.exportLastAt = formatDateJa(todayDate());
+    savePrefs();
+    if (el.lastExport) el.lastExport.textContent = '最後に書き出した日: ' + state.prefs.exportLastAt;
     el.dataStatus.textContent = 'エクスポートしました。';
   });
 
   el.importFile.addEventListener('change', function () {
     var file = el.importFile.files && el.importFile.files[0];
     if (!file) return;
+    /* 読み込み前の上限チェック（#28） */
+    if (file.size > FILE_LIMITS.jsonBytes) {
+      el.dataStatus.textContent = 'インポートできませんでした: ファイルが大きすぎます（上限5MB）。';
+      el.importFile.value = '';
+      return;
+    }
     var reader = new FileReader();
     reader.onload = function () {
+      var parsed = null;
       try {
-        var parsed = JSON.parse(String(reader.result));
-        if (!parsed || !Array.isArray(parsed.exercises) || typeof parsed.records !== 'object' || parsed.records === null) {
-          throw new Error('形式が違います');
-        }
-        var exercises = [];
-        parsed.exercises.forEach(function (raw) {
-          var ex = sanitizeExercise(raw);
-          if (ex) exercises.push(ex);
-        });
-        state.exercises = exercises;
-        state.records = parsed.records;
-        state.settings = sanitizeSettings(parsed.settings);
-        /* プロフィールが無い旧形式の書き出しでは、いまのプロフィールを保持する */
-        if (parsed.profile) {
-          state.profile = sanitizeProfile(parsed.profile);
-        }
-        saveAll();
-        saveProfile();
-        applyTheme();
-        renderAll();
-        el.dataStatus.textContent = 'インポートしました。';
+        parsed = JSON.parse(String(reader.result));
       } catch (e) {
-        el.dataStatus.textContent = 'インポートに失敗しました。JSONファイルの内容を確認してください。';
+        parsed = null;
       }
+      if (parsed === null) {
+        el.dataStatus.textContent = 'インポートできませんでした: JSONとして読めませんでした。ファイルを確認してください。';
+        el.importFile.value = '';
+        return;
+      }
+      /* 読み込む前に全体を検証する（#22）。不正なら現在のデータを維持する。 */
+      var result = validateImportData(parsed);
+      if (!result.ok) {
+        el.dataStatus.textContent = 'インポートできませんでした: ' + result.error;
+        el.importFile.value = '';
+        return;
+      }
+      /* 現在のデータを自動で退避してから差し替える（#26） */
+      stashBackup();
+      state.exercises = result.data.exercises;
+      state.records = result.data.records;
+      state.settings = sanitizeSettings(Object.assign({}, result.data.settings, {
+        cardId: result.data.settings.cardId !== '' ? result.data.settings.cardId : state.settings.cardId
+      }));
+      if (result.data.profile !== null) state.profile = result.data.profile;
+      if (result.data.rivals !== null) state.rivals = result.data.rivals;
+      saveAll();
+      saveRivals();
+      saveProfile();
+      applyTheme();
+      renderAll();
+      if (el.restoreBackupBtn) el.restoreBackupBtn.hidden = false;
+      el.dataStatus.textContent = 'インポートしました。読み込む前のデータは自動で退避しました（下のボタンから戻せます）。';
       el.importFile.value = '';
     };
     reader.readAsText(file);
   });
+
+  if (el.restoreBackupBtn) {
+    el.restoreBackupBtn.addEventListener('click', function () {
+      var backup = loadJSON(STORAGE_KEYS.backup, null);
+      if (!backup) {
+        el.dataStatus.textContent = '退避したデータがありません。';
+        return;
+      }
+      if (!window.confirm('インポート前に退避したデータに戻します。よろしいですか？')) return;
+      var result = validateImportData(backup);
+      if (!result.ok) {
+        el.dataStatus.textContent = '退避データが壊れているため、戻せませんでした: ' + result.error;
+        return;
+      }
+      state.exercises = result.data.exercises;
+      state.records = result.data.records;
+      state.settings = sanitizeSettings(Object.assign({}, result.data.settings, {
+        cardId: result.data.settings.cardId !== '' ? result.data.settings.cardId : state.settings.cardId
+      }));
+      if (result.data.profile !== null) state.profile = result.data.profile;
+      if (result.data.rivals !== null) state.rivals = result.data.rivals;
+      saveAll();
+      saveRivals();
+      saveProfile();
+      applyTheme();
+      renderAll();
+      el.dataStatus.textContent = '退避したデータに戻しました。';
+    });
+  }
 
   el.deleteAllBtn.addEventListener('click', function () {
     if (!window.confirm('すべてのデータ（種目・記録・設定・プロフィール・友達のカード）を削除して、はじめの状態に戻します。よろしいですか？')) {
@@ -1885,9 +2562,16 @@ function initEvents() {
       localStorage.removeItem(STORAGE_KEYS.settings);
       localStorage.removeItem(STORAGE_KEYS.rivals);
       localStorage.removeItem(STORAGE_KEYS.profile);
+      localStorage.removeItem(STORAGE_KEYS.prefs);
+      localStorage.removeItem(STORAGE_KEYS.backup);
     } catch (e) { /* そのまま初期化する */ }
+    editingExerciseId = null;
+    editingHistoryKey = null;
+    hideUndoBar();
     initState();
+    initMypageSel();
     saveAll();
+    savePrefs();
     applyTheme();
     renderAll();
     el.dataStatus.textContent = '全データを削除しました。';
@@ -1924,19 +2608,30 @@ function initState() {
 
   state.profile = sanitizeProfile(loadJSON(STORAGE_KEYS.profile, null));
 
+  /* 画面の好み（案内の表示・期間選択・書き出し日）の読み込み（#1 #16 #26） */
+  state.prefs = sanitizePrefs(loadJSON(STORAGE_KEYS.prefs, null));
+
+  /* 対戦カードの固有ID（#18）。無ければ生成して保存する。 */
+  if (state.settings.cardId === '') {
+    state.settings.cardId = 'card-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+  }
+
   saveAll();
   saveRivals();
   saveProfile();
+  savePrefs();
 }
 
 function init() {
   cacheElements();
   initState();
+  initMypageSel();
   applyTheme();
   initEvents();
   renderAll();
-  /* URLハッシュ #mypage で開かれた場合はマイページを初期表示にする */
-  if (window.location.hash === '#mypage') showView('mypage');
+  /* URLハッシュ（#menu / #mypage / #settings）で開かれた場合はそのビューを初期表示にする */
+  var initial = window.location.hash.replace('#', '');
+  if (VIEW_NAMES.indexOf(initial) !== -1 && initial !== 'today') showView(initial);
 }
 
 init();
