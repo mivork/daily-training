@@ -240,8 +240,8 @@
 }
 
 .btn--small {
-  min-height: 2.25rem;
-  padding: var(--space-1) var(--space-3);
+  min-height: var(--touch-target);
+  padding: var(--space-2) var(--space-3);
   font-size: var(--font-size-s);
 }
 
@@ -297,8 +297,19 @@
 .manage-row__actions {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2);
+  gap: var(--space-3);
+  align-items: center;
   margin-top: var(--space-3);
+}
+
+/* 削除ボタンは他の操作から離して行の右端に置く（押し間違い防止） */
+.manage-row__delete {
+  margin-left: auto;
+}
+
+.manage-row__summary {
+  color: var(--color-text-muted);
+  margin-top: var(--space-1);
 }
 
 .field--inline {
@@ -864,6 +875,158 @@
 
 [data-theme="dark"] .btn--danger:hover {
   background-color: #3a1d1d;
+}
+
+/* セットボタン: 押せないものは薄く、次に押すものは目立たせる */
+.set-toggle:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.set-toggle:disabled:hover {
+  background-color: var(--color-surface);
+}
+
+.set-toggle--done:disabled:hover {
+  background-color: var(--color-primary);
+}
+
+.set-toggle--next {
+  background-color: var(--color-primary-soft);
+}
+
+.set-toggle--next::after {
+  content: " ←次はこれ";
+  font-size: var(--font-size-s);
+}
+
+/* 保存失敗の警告バナー */
+.save-warning {
+  background-color: #fdecec;
+  color: var(--color-danger);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-m);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+  font-weight: 700;
+}
+
+[data-theme="dark"] .save-warning {
+  background-color: #3a1d1d;
+}
+
+/* 初回の案内 */
+.guide-card__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-left: 1.25rem;
+  margin: var(--space-3) 0 var(--space-4);
+}
+
+/* 設定のグループ見出し */
+.settings-group {
+  font-size: var(--font-size-l);
+  margin: var(--space-5) 0 var(--space-3);
+}
+
+.settings-group:first-of-type {
+  margin-top: var(--space-4);
+}
+
+/* 削除の取り消しバー */
+.undo-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+  background-color: var(--color-surface-alt);
+  border-radius: var(--radius-m);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+  font-weight: 700;
+}
+
+.undo-bar[hidden] {
+  display: none;
+}
+
+/* 種目の編集フォーム */
+.edit-form {
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+/* 履歴の編集 */
+.history-edit {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.history-edit__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  align-items: center;
+}
+
+.history-edit__name {
+  font-weight: 700;
+  min-width: 7rem;
+}
+
+.history-edit__row input {
+  width: 5rem;
+}
+
+/* マイページ内メニュー（クイックリンク） */
+.quick-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+}
+
+.quick-links__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--touch-target);
+  font-weight: 700;
+  color: var(--color-primary);
+}
+
+/* 比較表の横スクロール（左端の指標列を固定） */
+.table-scroll {
+  overflow-x: auto;
+  margin-bottom: var(--space-4);
+}
+
+.table-scroll .rival-table {
+  margin-bottom: 0;
+}
+
+.rival-table th:first-child {
+  position: sticky;
+  left: 0;
+  background-color: var(--color-surface);
+  z-index: 1;
+}
+
+/* 対戦の手順 */
+.steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-left: 1.5rem;
+  margin-bottom: var(--space-3);
+}
+
+/* 週セレクト（週カード内） */
+.period-select__week {
+  margin-bottom: var(--space-3);
 }
 
 /* 狭い画面では管理行の操作を縦に寄せる */
