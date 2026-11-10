@@ -1,23 +1,25 @@
 /* デザイントークン: 色・余白・角丸・文字サイズなどの定義 */
 :root {
-  /* 色 */
-  --color-bg: #f6f4ef;
-  --color-surface: #ffffff;
-  --color-surface-alt: #efede6;
-  --color-text: #1c2430;
-  --color-text-muted: #47536a;
-  --color-border: #b9bec7;
-  --color-primary: #166534;
-  --color-primary-hover: #14532d;
-  --color-primary-soft: #dcf2e3;
-  --color-primary-soft-text: #14532d;
+  /* 色: 夕日（sunset）テーマ。沈む夕日の深いオレンジ〜コーラルを基調にする。
+     白文字が載るプライマリは、コントラスト確保のため一段濃い色にしてある。
+     削除系の赤（danger）は夕日の赤と混同しないよう、従来の赤のままにする。 */
+  --color-bg: #faf3ec;
+  --color-surface: #fffdf9;
+  --color-surface-alt: #f5e8da;
+  --color-text: #2b1d16;
+  --color-text-muted: #6f5546;
+  --color-border: #cbb59f;
+  --color-primary: #c2410c;
+  --color-primary-hover: #9a3412;
+  --color-primary-soft: #fdeeda;
+  --color-primary-soft-text: #9a3412;
   --color-danger: #b91c1c;
   --color-danger-hover: #991b1b;
-  --color-focus: #1d4ed8;
-  --color-badge-done-bg: #166534;
+  --color-focus: #b45309;
+  --color-badge-done-bg: #c2410c;
   --color-badge-done-text: #ffffff;
-  --color-badge-pending-bg: #e5e1d8;
-  --color-badge-pending-text: #3f4756;
+  --color-badge-pending-bg: #f0e2d0;
+  --color-badge-pending-text: #5f4636;
 
   /* 余白 */
   --space-1: 0.25rem;
@@ -51,22 +53,24 @@
 /* ダークモード: 同じ変数を暗い配色で上書きする。
    文字と背景のコントラストが確保できる組み合わせにしてある。 */
 [data-theme="dark"] {
-  --color-bg: #0f141a;
-  --color-surface: #1b232e;
-  --color-surface-alt: #28313e;
-  --color-text: #eef2f7;
-  --color-text-muted: #aeb9c8;
-  --color-border: #54657c;
-  --color-primary: #6fd598;
-  --color-primary-hover: #57c785;
-  --color-primary-soft: #173d24;
-  --color-primary-soft-text: #a9e8c0;
+  /* ダーク: 夕暮れ後の暗い茶〜プラムの背景に、明るいオレンジを合わせる。
+     プライマリの上に載る文字は濃い暖色にする（components.css 側で指定）。 */
+  --color-bg: #201216;
+  --color-surface: #2c1a1d;
+  --color-surface-alt: #3d262b;
+  --color-text: #f7ead9;
+  --color-text-muted: #d3bda6;
+  --color-border: #6e4a44;
+  --color-primary: #ff922b;
+  --color-primary-hover: #f97f08;
+  --color-primary-soft: #472413;
+  --color-primary-soft-text: #ffc078;
   --color-danger: #f28b82;
   --color-danger-hover: #f6a49c;
-  --color-focus: #8ab4ff;
-  --color-badge-done-bg: #6fd598;
-  --color-badge-done-text: #0c1a10;
-  --color-badge-pending-bg: #28313e;
-  --color-badge-pending-text: #c7d0de;
+  --color-focus: #ffb35c;
+  --color-badge-done-bg: #ff922b;
+  --color-badge-done-text: #2b1503;
+  --color-badge-pending-bg: #3d262b;
+  --color-badge-pending-text: #e6cfba;
   --shadow-card: 0 1px 3px rgb(0 0 0 / 0.5);
 }
