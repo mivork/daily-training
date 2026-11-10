@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="毎日続ける自重トレーニングの記録アプリ。種目は自由に追加・編集できます。">
+  <meta name="theme-color" content="#166534">
+  <title>毎日トレーニング</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="images/icon.svg" type="image/svg+xml">
+</head>
+<body>
+  <div class="app">
+    <header class="app__header">
+      <h1>毎日トレーニング</h1>
+      <p class="app__subtitle">自重トレーニングを毎日少しずつ。やったらセットをタップして記録します。</p>
+      <button type="button" class="btn btn--small theme-toggle" id="theme-toggle" aria-pressed="false">ダークモードにする</button>
+    </header>
+
+    <nav class="view-nav" aria-label="画面の切り替え">
+      <button type="button" class="view-nav__btn view-nav__btn--active" id="nav-today" aria-current="page">今日</button>
+      <button type="button" class="view-nav__btn" id="nav-mypage">マイページ</button>
+    </nav>
+
+    <main>
+      <div id="view-today">
+      <!-- 今日 -->
+      <section class="card" aria-labelledby="today-heading">
+        <h2 id="today-heading">今日</h2>
+
+        <div class="today-summary">
+          <p class="today-summary__date" id="today-date"></p>
+          <p class="today-summary__streak" id="today-streak"></p>
+          <p class="today-summary__schedule" id="today-schedule"></p>
+        </div>
+
+        <p class="week-progress" id="week-progress"></p>
+
+        <div class="advice-card" aria-labelledby="advice-heading">
+          <h3 class="advice-card__title" id="advice-heading">Museのアドバイス</h3>
+          <p class="advice-card__text" id="advice-text"></p>
+        </div>
+
+        <div class="progress">
+          <div class="progress__track" id="progress-track" role="progressbar"
+               aria-label="今日の進捗" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div class="progress__bar" id="progress-bar"></div>
+          </div>
+          <p class="progress__text" id="progress-text"></p>
+        </div>
+
+        <div class="share-row">
+          <button type="button" class="btn" id="share-btn">今日の結果を共有</button>
+          <p class="data-status" id="share-status" role="status"></p>
+        </div>
+
+        <p class="done-banner" id="done-banner" hidden>今日は完了！おつかれさまでした。</p>
+
+        <p class="rest-banner" id="rest-banner" hidden>今日は休みの日です。完了は必須ではありません。やる場合は、できるところだけチェックしてOKです（付けた分は記録に残ります）。</p>
+
+        <label class="short-toggle" for="short-toggle">
+          <input type="checkbox" id="short-toggle">
+          <span class="short-toggle__text">
+            <span class="short-toggle__label">短縮モード</span>
+            <span class="short-toggle__hint">忙しい日用に、目標を各種目1セットにします。これは今日だけの切替です。曜日ごとに自動で短縮日にしたい場合は、下の「設定」で選べます。</span>
+          </span>
+        </label>
+
+        <ul class="exercise-list" id="today-list"></ul>
+        <p class="empty-message" id="today-empty" hidden>種目がありません。下の「種目の管理」から追加してください。</p>
+      </section>
+
+      <!-- 種目の管理 -->
+      <section class="card" aria-labelledby="manage-heading">
+        <h2 id="manage-heading">種目の管理</h2>
+
+        <ul class="manage-list" id="manage-list"></ul>
+
+        <form id="add-form">
+          <div class="form-grid">
+            <div class="field">
+              <label class="field__label" for="add-name">名前</label>
+              <input type="text" id="add-name" name="name" required maxlength="40" placeholder="例: スクワット">
+            </div>
+            <div class="field">
+              <label class="field__label" for="add-amount">数値</label>
+              <input type="number" id="add-amount" name="amount" required min="1" max="999" value="20">
+            </div>
+            <div class="field">
+              <label class="field__label" for="add-unit">単位</label>
+              <select id="add-unit" name="unit">
+                <option value="回" selected>回</option>
+                <option value="秒">秒</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="field__label" for="add-sets">セット数</label>
+              <input type="number" id="add-sets" name="sets" required min="1" max="10" value="2">
+            </div>
+            <div class="field field--wide">
+              <label class="field__label" for="add-note">メモ（任意）</label>
+              <input type="text" id="add-note" name="note" maxlength="80" placeholder="フォームの注意など">
+            </div>
+          </div>
+          <button type="submit" class="btn btn--primary">種目を追加</button>
+        </form>
+      </section>
+
+      <!-- 履歴 -->
+      <section class="card" aria-labelledby="history-heading">
+        <h2 id="history-heading">履歴</h2>
+        <p class="history-total" id="history-total"></p>
+        <ul class="history-list" id="history-list"></ul>
+      </section>
+
+      <!-- 設定 -->
+      <section class="card" aria-labelledby="settings-heading">
+        <h2 id="settings-heading">設定</h2>
+        <fieldset class="settings-fieldset">
+          <legend class="field__label">トレーニングする曜日</legend>
+          <p class="settings-hint">チェックを外した曜日は「休みの日」になります。休みの日は、連続日数や完了率の対象になりません。</p>
+          <div class="weekday-options" id="training-days">
+            <label class="weekday-option"><input type="checkbox" name="training-day" value="0"> 日</label>
+            <label class="weekday-option"><input type="checkbox" name="training-day" value="1"> 月</label>
+            <label class="weekday-option"><input type="checkbox" name="training-day" value="2"> 火</label>
+            <label class="weekday-option"><input type="checkbox" name="training-day" value="3"> 水</label>
+            <label class="weekday-option"><input type="checkbox" name="training-day" value="4"> 木</label>
+            <label class="weekday-option"><input type="checkbox" name="training-day" value="5"> 金</label>
+            <label class="weekday-option"><input type="checkbox" name="training-day" value="6"> 土</label>
+          </div>
+        </fieldset>
+        <fieldset class="settings-fieldset">
+          <legend class="field__label">やる時間</legend>
+          <p class="settings-hint">目安でかまいません。設定すると「今日の予定」に表示されます。</p>
+          <div class="form-grid">
+            <div class="field">
+              <label class="field__label" for="time-slot">時間帯</label>
+              <select id="time-slot" name="time-slot">
+                <option value="morning">朝</option>
+                <option value="noon">昼</option>
+                <option value="night">夜</option>
+                <option value="undecided" selected>決めていない</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="field__label" for="time-value">時刻（任意）</label>
+              <input type="time" id="time-value" name="time-value">
+            </div>
+          </div>
+        </fieldset>
+        <fieldset class="settings-fieldset">
+          <legend class="field__label">ニックネーム</legend>
+          <p class="settings-hint">マイページの「友達と競争」で使う対戦カードに表示される名前です。空欄のときは「あなた」と表示されます。本名など、個人が分かる情報は入れないでください。</p>
+          <div class="field">
+            <label class="field__label" for="nickname">ニックネーム（任意）</label>
+            <input type="text" id="nickname" name="nickname" maxlength="20" placeholder="例: たろう">
+          </div>
+        </fieldset>
+        <fieldset class="settings-fieldset">
+          <legend class="field__label">1週間の目標</legend>
+          <p class="settings-hint">1週間（月曜〜日曜）に何日完了したいかを選べます。「今日」画面に今週の進捗が表示されます。</p>
+          <div class="field">
+            <label class="field__label" for="weekly-goal">目標日数</label>
+            <select id="weekly-goal" name="weekly-goal">
+              <option value="0" selected>設定しない</option>
+              <option value="1">1日</option>
+              <option value="2">2日</option>
+              <option value="3">3日</option>
+              <option value="4">4日</option>
+              <option value="5">5日</option>
+              <option value="6">6日</option>
+              <option value="7">7日</option>
+            </select>
+          </div>
+        </fieldset>
+        <fieldset class="settings-fieldset">
+          <legend class="field__label">短縮日にする曜日</legend>
+          <p class="settings-hint">選んだ曜日は、はじめから短縮モード（各種目1セット）で始まります。いつでも今日画面のトグルでその日だけ変えられます。</p>
+          <div class="weekday-options" id="short-days">
+            <label class="weekday-option"><input type="checkbox" name="short-day" value="0"> 日</label>
+            <label class="weekday-option"><input type="checkbox" name="short-day" value="1"> 月</label>
+            <label class="weekday-option"><input type="checkbox" name="short-day" value="2"> 火</label>
+            <label class="weekday-option"><input type="checkbox" name="short-day" value="3"> 水</label>
+            <label class="weekday-option"><input type="checkbox" name="short-day" value="4"> 木</label>
+            <label class="weekday-option"><input type="checkbox" name="short-day" value="5"> 金</label>
+            <label class="weekday-option"><input type="checkbox" name="short-day" value="6"> 土</label>
+          </div>
+        </fieldset>
+      </section>
+
+      <!-- データ -->
+      <section class="card" aria-labelledby="data-heading">
+        <h2 id="data-heading">データ</h2>
+        <div class="data-actions">
+          <div class="data-actions__row">
+            <button type="button" class="btn" id="export-btn">JSONエクスポート</button>
+          </div>
+          <div class="data-actions__row">
+            <div class="field">
+              <label class="field__label" for="import-file">JSONインポート</label>
+              <input type="file" id="import-file" accept=".json,application/json">
+            </div>
+          </div>
+          <div class="data-actions__row">
+            <button type="button" class="btn btn--danger" id="delete-all-btn">全データ削除</button>
+          </div>
+          <p class="data-status" id="data-status" role="status"></p>
+        </div>
+      </section>
+      </div>
+
+      <div id="view-mypage" hidden>
+      <!-- プロフィール -->
+      <section class="card" aria-labelledby="profile-heading">
+        <h2 id="profile-heading">プロフィール</h2>
+        <div class="profile-view">
+          <div class="profile-avatar">
+            <img class="profile-avatar__img" id="profile-img" alt="プロフィール画像" hidden>
+            <span class="profile-avatar__initial" id="profile-initial" aria-hidden="true">あ</span>
+          </div>
+          <div class="profile-view__texts">
+            <p class="profile-view__name" id="profile-name">あなた</p>
+            <p class="profile-view__bio" id="profile-bio"></p>
+          </div>
+        </div>
+        <div class="profile-edit">
+          <div class="field">
+            <label class="field__label" for="profile-nickname">ニックネーム</label>
+            <input type="text" id="profile-nickname" name="profile-nickname" maxlength="20" placeholder="例: たろう">
+          </div>
+          <div class="field">
+            <label class="field__label" for="profile-bio-input">紹介文</label>
+            <textarea id="profile-bio-input" name="profile-bio" rows="3" maxlength="200" placeholder="例: 毎朝少しずつ続けています"></textarea>
+            <p class="char-count"><span id="profile-bio-count">0</span> / 200文字</p>
+          </div>
+          <div class="field">
+            <label class="field__label" for="profile-image-file">プロフィール画像</label>
+            <input type="file" id="profile-image-file" accept="image/*">
+          </div>
+          <div class="data-actions__row">
+            <button type="button" class="btn btn--primary" id="profile-save-btn">プロフィールを保存</button>
+            <button type="button" class="btn btn--danger" id="profile-image-delete-btn">画像を削除</button>
+          </div>
+          <p class="data-status" id="profile-status" role="status"></p>
+          <p class="settings-hint">画像と紹介文は、このブラウザの中にだけ保存され、自動で外部に送信されることはありません。端末の外に出るのは、自分で「対戦カード」を書き出して友達に共有するときだけです（対戦カードにはニックネーム・紹介文・プロフィール画像が含まれます）。画像は自動で小さく（最大256×256）してから保存します。</p>
+        </div>
+      </section>
+
+      <!-- マイページ -->
+      <section class="card" aria-labelledby="mypage-heading">
+        <h2 id="mypage-heading">マイページ</h2>
+
+        <div class="period-select">
+          <div class="field">
+            <label class="field__label" for="mp-year">年</label>
+            <select id="mp-year" name="mp-year"></select>
+          </div>
+          <div class="field">
+            <label class="field__label" for="mp-month">月</label>
+            <select id="mp-month" name="mp-month">
+              <option value="0">1月</option>
+              <option value="1">2月</option>
+              <option value="2">3月</option>
+              <option value="3">4月</option>
+              <option value="4">5月</option>
+              <option value="5">6月</option>
+              <option value="6">7月</option>
+              <option value="7">8月</option>
+              <option value="8">9月</option>
+              <option value="9">10月</option>
+              <option value="10">11月</option>
+              <option value="11">12月</option>
+            </select>
+          </div>
+          <div class="field">
+            <label class="field__label" for="mp-week">週</label>
+            <input type="week" id="mp-week" name="mp-week">
+          </div>
+          <p class="period-select__hint">選んだ年と月は、「月」と「年」の比較、月別グラフ、カレンダーに使います。週を選ぶと、その週と前週の比較になります（週は月曜はじまりです）。週が空のときは今週として扱います。</p>
+        </div>
+
+        <div class="compare-grid">
+          <section class="compare-card" aria-labelledby="compare-week-heading">
+            <h3 id="compare-week-heading">週の比較</h3>
+            <p class="compare-card__periods" id="compare-week-periods"></p>
+            <table class="compare-table">
+              <thead>
+                <tr><th scope="col">指標</th><th scope="col">今の期間</th><th scope="col">前の期間</th><th scope="col">差</th></tr>
+              </thead>
+              <tbody id="compare-week-body"></tbody>
+            </table>
+          </section>
+
+          <section class="compare-card" aria-labelledby="compare-month-heading">
+            <h3 id="compare-month-heading">月の比較</h3>
+            <p class="compare-card__periods" id="compare-month-periods"></p>
+            <table class="compare-table">
+              <thead>
+                <tr><th scope="col">指標</th><th scope="col">今の期間</th><th scope="col">前の期間</th><th scope="col">差</th></tr>
+              </thead>
+              <tbody id="compare-month-body"></tbody>
+            </table>
+          </section>
+
+          <section class="compare-card" aria-labelledby="compare-year-heading">
+            <h3 id="compare-year-heading">年の比較</h3>
+            <p class="compare-card__periods" id="compare-year-periods"></p>
+            <table class="compare-table">
+              <thead>
+                <tr><th scope="col">指標</th><th scope="col">今の期間</th><th scope="col">前の期間</th><th scope="col">差</th></tr>
+              </thead>
+              <tbody id="compare-year-body"></tbody>
+            </table>
+          </section>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="chart-heading">
+        <h2 id="chart-heading">月別の完了日数</h2>
+        <p class="settings-hint" id="chart-note"></p>
+        <ul class="bar-chart" id="month-chart"></ul>
+      </section>
+
+      <section class="card" aria-labelledby="calendar-heading">
+        <h2 id="calendar-heading">カレンダー</h2>
+        <p class="settings-hint" id="calendar-note"></p>
+        <div id="calendar"></div>
+        <ul class="legend">
+          <li class="legend__item"><span class="legend__mark">✓</span> 完了</li>
+          <li class="legend__item"><span class="legend__mark">✓短</span> 短縮で完了</li>
+          <li class="legend__item"><span class="legend__mark">休</span> 休みの日</li>
+          <li class="legend__item"><span class="legend__mark">−</span> 未完了</li>
+          <li class="legend__item"><span class="legend__mark legend__mark--today">今日</span> 今日の日付（太い枠）</li>
+        </ul>
+      </section>
+
+      <section class="card" aria-labelledby="ex-totals-heading">
+        <h2 id="ex-totals-heading">種目別の累計</h2>
+        <ul class="ex-totals" id="exercise-totals"></ul>
+        <p class="empty-message" id="exercise-totals-empty" hidden>まだ記録がありません。</p>
+      </section>
+
+      <section class="card" aria-labelledby="rivals-heading">
+        <h2 id="rivals-heading">友達と競争</h2>
+        <p class="settings-hint">サーバーを使わず、端末同士だけで完結する対戦です。1. 自分の「対戦カード」を書き出して、友達に送ります。2. 友達からもらったカードを取り込みます。3. 下の表で比べられます。友達のカードは最大5人分まで取り込めます。</p>
+        <div class="data-actions">
+          <div class="data-actions__row">
+            <button type="button" class="btn" id="card-export-btn">対戦カードを書き出す</button>
+            <button type="button" class="btn" id="card-copy-btn">カードをコピー</button>
+          </div>
+          <p class="data-status" id="card-status" role="status"></p>
+          <div class="data-actions__row">
+            <div class="field">
+              <label class="field__label" for="rival-file">友達のカードを取り込む（JSON）</label>
+              <input type="file" id="rival-file" accept=".json,application/json">
+            </div>
+          </div>
+          <p class="data-status" id="rival-status" role="status"></p>
+        </div>
+        <p class="empty-message" id="rival-empty">まだ友達のカードがありません。上の手順で、友達とカードを交換してみましょう。</p>
+        <div id="rival-compare" hidden>
+          <div class="rival-summary" id="rival-summary"></div>
+          <table class="compare-table rival-table">
+            <thead id="rival-thead"></thead>
+            <tbody id="rival-tbody"></tbody>
+          </table>
+        </div>
+        <ul class="rival-list" id="rival-list"></ul>
+      </section>
+
+      <section class="card" aria-labelledby="totals-heading">
+        <h2 id="totals-heading">累計</h2>
+        <dl class="totals-grid">
+          <div class="totals-grid__item">
+            <dt>総完了日数</dt>
+            <dd id="total-days">0日</dd>
+          </div>
+          <div class="totals-grid__item">
+            <dt>最長連続日数</dt>
+            <dd id="total-longest-streak">0日</dd>
+          </div>
+          <div class="totals-grid__item">
+            <dt>現在の連続日数</dt>
+            <dd id="total-current-streak">0日</dd>
+          </div>
+          <div class="totals-grid__item">
+            <dt>総完了セット数</dt>
+            <dd id="total-sets">0セット</dd>
+          </div>
+        </dl>
+      </section>
+      </div>
+    </main>
+
+    <footer class="app__footer">
+      <p>データはこのブラウザの中（localStorage）にだけ保存され、外部に送信されることはありません。</p>
+    </footer>
+  </div>
+
+  <p class="visually-hidden" id="live-region" aria-live="polite"></p>
+
+  <script src="js/main.js" defer></script>
+</body>
+</html>

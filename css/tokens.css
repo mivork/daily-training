@@ -1,0 +1,72 @@
+/* デザイントークン: 色・余白・角丸・文字サイズなどの定義 */
+:root {
+  /* 色 */
+  --color-bg: #f6f4ef;
+  --color-surface: #ffffff;
+  --color-surface-alt: #efede6;
+  --color-text: #1c2430;
+  --color-text-muted: #47536a;
+  --color-border: #b9bec7;
+  --color-primary: #166534;
+  --color-primary-hover: #14532d;
+  --color-primary-soft: #dcf2e3;
+  --color-primary-soft-text: #14532d;
+  --color-danger: #b91c1c;
+  --color-danger-hover: #991b1b;
+  --color-focus: #1d4ed8;
+  --color-badge-done-bg: #166534;
+  --color-badge-done-text: #ffffff;
+  --color-badge-pending-bg: #e5e1d8;
+  --color-badge-pending-text: #3f4756;
+
+  /* 余白 */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+
+  /* 角丸 */
+  --radius-s: 0.375rem;
+  --radius-m: 0.625rem;
+  --radius-l: 1rem;
+  --radius-pill: 999px;
+
+  /* 文字 */
+  --font-family: "Hiragino Kaku Gothic ProN", "Hiragino Sans",
+    "Noto Sans JP", "Yu Gothic UI", Meiryo, system-ui, sans-serif;
+  --font-size-s: 0.875rem;
+  --font-size-m: 1rem;
+  --font-size-l: 1.25rem;
+  --font-size-xl: 1.75rem;
+  --line-height: 1.6;
+
+  /* その他 */
+  --shadow-card: 0 1px 3px rgb(28 36 48 / 0.12);
+  --touch-target: 2.75rem;
+  --content-max-width: 44rem;
+}
+
+/* ダークモード: 同じ変数を暗い配色で上書きする。
+   文字と背景のコントラストが確保できる組み合わせにしてある。 */
+[data-theme="dark"] {
+  --color-bg: #0f141a;
+  --color-surface: #1b232e;
+  --color-surface-alt: #28313e;
+  --color-text: #eef2f7;
+  --color-text-muted: #aeb9c8;
+  --color-border: #54657c;
+  --color-primary: #6fd598;
+  --color-primary-hover: #57c785;
+  --color-primary-soft: #173d24;
+  --color-primary-soft-text: #a9e8c0;
+  --color-danger: #f28b82;
+  --color-danger-hover: #f6a49c;
+  --color-focus: #8ab4ff;
+  --color-badge-done-bg: #6fd598;
+  --color-badge-done-text: #0c1a10;
+  --color-badge-pending-bg: #28313e;
+  --color-badge-pending-text: #c7d0de;
+  --shadow-card: 0 1px 3px rgb(0 0 0 / 0.5);
+}
