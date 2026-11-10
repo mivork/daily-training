@@ -930,6 +930,8 @@ function renderToday() {
       var note = document.createElement('p');
       note.className = 'exercise-row__note';
       note.textContent = ex.note;
+      /* 表示は1行に省略されるため、全文は title でも確認できるようにする */
+      note.title = ex.note;
       info.appendChild(note);
     }
     li.appendChild(info);
@@ -2118,8 +2120,29 @@ function renderAll() {
   if (currentView === 'mypage') renderMypage();
 }
 
+/* 折りたたみUI: 見出しボタン（aria-expanded）と本文を対応づける。
+   初期状態は閉。開閉状態はセッション内のみで、保存はしない。 */
+function setupCollapse(toggleId, bodyId) {
+  var toggle = document.getElementById(toggleId);
+  var body = document.getElementById(bodyId);
+  if (!toggle || !body) return;
+  toggle.addEventListener('click', function () {
+    var open = toggle.getAttribute('aria-expanded') === 'true';
+    toggle.setAttribute('aria-expanded', open ? 'false' : 'true');
+    body.hidden = open;
+  });
+}
+
 // ===== イベント =====
 function initEvents() {
+  /* 折りたたみ（今日: アドバイス／共有／履歴、マイページ: 月別グラフ／種目別累計／友達と競争） */
+  setupCollapse('toggle-advice', 'advice-body');
+  setupCollapse('toggle-share', 'share-body');
+  setupCollapse('toggle-history', 'history-body');
+  setupCollapse('toggle-chart', 'chart-body');
+  setupCollapse('toggle-extotals', 'extotals-body');
+  setupCollapse('toggle-rivals', 'rivals-body');
+
   var navLabels = { today: '今日', menu: 'メニュー', mypage: 'マイページ', settings: '設定' };
   var navEls = { today: el.navToday, menu: el.navMenu, mypage: el.navMypage, settings: el.navSettings };
   VIEW_NAMES.forEach(function (name) {
