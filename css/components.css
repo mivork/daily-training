@@ -125,6 +125,28 @@
   margin-bottom: var(--space-4);
 }
 
+/* 完了した瞬間だけの軽いアニメーション（R17） */
+@keyframes done-pop {
+  0% { transform: scale(0.96); }
+  40% { transform: scale(1.03); }
+  100% { transform: scale(1); }
+}
+
+.done-banner--celebrate {
+  animation: done-pop 0.5s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .done-banner--celebrate {
+    animation: none;
+  }
+}
+
+/* 今日画面の一括操作（一括完了ボタン） */
+.today-actions {
+  margin-bottom: var(--space-3);
+}
+
 /* 短縮モード切替 */
 .short-toggle {
   display: flex;
@@ -180,6 +202,43 @@
 }
 
 .exercise-row__sets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+/* 種目ごとの進捗と状態（R5）: 色だけでなく文字でも区別する */
+.exercise-row__progress {
+  font-size: var(--font-size-s);
+  font-weight: 700;
+  margin-top: var(--space-1);
+}
+
+.exercise-row__progress--done {
+  color: var(--color-primary);
+}
+
+.exercise-row__progress--partial {
+  color: var(--color-primary-soft-text);
+}
+
+.exercise-row__progress--todo {
+  color: var(--color-text-muted);
+}
+
+.exercise-row__progress--skipped {
+  color: var(--color-text-muted);
+}
+
+/* スキップ中の種目行（R9）: グレーにして区別する */
+.exercise-row--skipped {
+  background-color: var(--color-surface-alt);
+  opacity: 0.75;
+}
+
+/* 種目行の操作ボタン（一括完了・スキップ・編集） */
+.exercise-row__actions {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
@@ -280,6 +339,45 @@
   grid-column: 1 / -1;
 }
 
+/* メニュー画面の小見出し（追加／テンプレート／いまの種目） */
+.manage-subheading {
+  margin-top: var(--space-5);
+  margin-bottom: var(--space-2);
+}
+
+/* テンプレート一覧（R2） */
+.template-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.template-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-m);
+  padding: var(--space-2) var(--space-3);
+}
+
+.template-row__name {
+  font-weight: 700;
+}
+
+.template-row__spec {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-s);
+}
+
+/* まとめて編集の操作行（R3） */
+.bulk-controls {
+  margin-bottom: var(--space-2);
+}
+
 /* 種目の管理行 */
 .manage-list {
   display: flex;
@@ -297,6 +395,51 @@
 .manage-row__name {
   font-weight: 700;
   margin-bottom: var(--space-2);
+}
+
+/* 管理行の先頭行（ドラッグハンドル＋名前）（R7） */
+.manage-row__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.manage-row__head .manage-row__name {
+  margin-bottom: 0;
+}
+
+/* ドラッグハンドル（R7）。タッチではスクロールと競合しないよう touch-action を切る */
+.drag-handle {
+  flex-shrink: 0;
+  min-width: var(--touch-target);
+  min-height: var(--touch-target);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-m);
+  background-color: var(--color-surface-alt);
+  color: var(--color-text-muted);
+  font-weight: 700;
+  cursor: grab;
+  touch-action: none;
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+.manage-row--dragging {
+  position: relative;
+  z-index: 2;
+  opacity: 0.9;
+  box-shadow: var(--shadow-card);
+  background-color: var(--color-surface);
+}
+
+/* まとめて編集の入力欄（R3） */
+.manage-row__bulk {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
 }
 
 .manage-row__controls {
@@ -485,6 +628,37 @@
 
 .view-nav__btn--active:hover {
   background-color: var(--color-primary-hover);
+}
+
+/* 下部固定ナビ（R6）: 広い画面では出さず、スマホ幅でのみ上部ナビと入れ替える */
+.view-nav--bottom {
+  display: none;
+}
+
+/* 保存トースト（R10）: 画面下部に短時間だけ出す */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: var(--space-4);
+  transform: translateX(-50%);
+  z-index: 30;
+  max-width: calc(100vw - 2rem);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-pill);
+  background-color: var(--color-text);
+  color: var(--color-bg);
+  box-shadow: var(--shadow-card);
+  font-size: var(--font-size-s);
+  font-weight: 700;
+  text-align: center;
+}
+
+/* 引き継ぎコードの欄（R15） */
+.transfer-code {
+  width: 100%;
+  font-family: ui-monospace, monospace;
+  font-size: var(--font-size-s);
+  overflow-wrap: anywhere;
 }
 
 /* マイページ: 期間の選択 */
@@ -682,6 +856,32 @@
 .calendar__day-num {
   display: block;
   font-weight: 700;
+}
+
+/* 記録がある日のタップ用ボタン（R14） */
+.calendar__day-btn {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius-s);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.calendar__day-btn:hover {
+  background-color: var(--color-primary-soft);
+}
+
+.calendar__cell--editing {
+  background-color: var(--color-primary-soft);
+}
+
+.calendar-edit__heading {
+  margin-top: var(--space-3);
 }
 
 .calendar__cell--today .calendar__day-num {
@@ -1101,5 +1301,35 @@
 
   .history-row__date {
     min-width: 0;
+  }
+}
+
+/* スマホ幅では下部固定ナビに切り替える（R6）。
+   コンテンツ下部には、固定ナビに隠れない分の余白を確保する。 */
+@media (max-width: 40rem) {
+  .view-nav--top {
+    display: none;
+  }
+
+  .view-nav--bottom {
+    display: flex;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 20;
+    margin-bottom: 0;
+    padding: var(--space-2);
+    background-color: var(--color-surface);
+    border-top: 1px solid var(--color-border);
+  }
+
+  .app {
+    padding-bottom: 5.5rem;
+  }
+
+  /* トーストは固定ナビの上に出す */
+  .toast {
+    bottom: 5.75rem;
   }
 }

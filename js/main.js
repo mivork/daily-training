@@ -64,8 +64,24 @@ var DEFAULT_PREFS = {
   exportLastAt: '',
   mpYear: null,
   mpMonth: null,
-  mpWeek: ''
+  mpWeek: '',
+  startPresetDone: false
 };
+
+/* 種目のテンプレート（R2）。「テンプレートから追加」で1タップ追加できる。
+   同じ名前の種目がすでにある場合は追加しない。 */
+var EXERCISE_TEMPLATES = [
+  { name: 'スクワット', amount: 20, unit: '回', sets: 2, note: 'ひざはつま先より前に出しすぎない' },
+  { name: 'ランジ', amount: 10, unit: '回', sets: 2, note: '左右交互に。バランスが不安なら壁に手をつく' },
+  { name: '壁腕立て', amount: 15, unit: '回', sets: 2, note: '壁に手をついて行う、やさしい腕立て伏せ' },
+  { name: '腹筋（クランチ）', amount: 20, unit: '回', sets: 2, note: 'お尻は地面につけたまま' },
+  { name: 'ヒップリフト', amount: 15, unit: '回', sets: 2, note: '' },
+  { name: '背筋', amount: 15, unit: '回', sets: 2, note: '小さく持ち上げるだけ' },
+  { name: 'つま先立ち', amount: 20, unit: '回', sets: 2, note: 'ゆっくり。壁に手をついてOK' },
+  { name: 'プランク', amount: 30, unit: '秒', sets: 2, note: '' },
+  { name: 'サイドプランク', amount: 20, unit: '秒', sets: 2, note: '左右それぞれ' },
+  { name: 'もも上げ', amount: 30, unit: '回', sets: 2, note: 'その場で足踏みするように' }
+];
 
 /* やる時間の時間帯ラベル。「決めていない」は予定表示に出さない。 */
 var TIME_SLOT_LABELS = { morning: '朝', noon: '昼', night: '夜', undecided: '' };
@@ -221,6 +237,7 @@ function sanitizePrefs(raw) {
   if (raw && typeof raw === 'object') {
     p.schemaVersion = SCHEMA_VERSION;
     p.guideDismissed = raw.guideDismissed === true;
+    p.startPresetDone = raw.startPresetDone === true;
     if (typeof raw.exportLastAt === 'string') p.exportLastAt = raw.exportLastAt.slice(0, 40);
     if (typeof raw.mpYear === 'number' && isFinite(raw.mpYear)) {
       p.mpYear = Math.min(9999, Math.max(1, Math.floor(raw.mpYear)));
@@ -383,6 +400,7 @@ function ensureTodayRecord(short) {
   if (!record) {
     record = {
       done: {},
+      skipped: {},
       short: short,
       /* 記録を作る時点の日種別を固定する（#24） */
       dayType: isTrainingDay(todayDate()) ? 'training' : 'rest'
@@ -395,7 +413,15 @@ function ensureTodayRecord(short) {
   return record;
 }
 
-/* 1日の統計。スナップショットがあればそれを使い、なければ現在の種目で計算する。 */
+/* その日にスキップされた種目かどうか（R9）。skipped の無い旧記録でも安全に読む。 */
+function isSkippedIn(record, id) {
+  return !!(record && record.skipped && typeof record.skipped === 'object' && record.skipped[id] === true);
+}
+
+/* 1日の統計。スナップショットがあればそれを使い、なければ現在の種目で計算する。
+   スキップした種目（R9）は「実施した」扱いにせず、完了率の分母（totalTarget）と
+   完了セット数・合計回数（countedDone 経由）からも外す。ただし全種目が
+   「完了またはスキップ」なら、その日は完了として扱う。 */
 function dayStats(key) {
   var record = getRecord(key);
   var date = parseKey(key);
@@ -403,6 +429,17 @@ function dayStats(key) {
   var entries = [];
   var totalTarget = 0;
   var totalDone = 0;
+  var skippedCount = 0;
+
+  function pushEntry(entry) {
+    entries.push(entry);
+    if (entry.skipped) {
+      skippedCount += 1;
+    } else {
+      totalTarget += entry.target;
+      totalDone += entry.done;
+    }
+  }
 
   if (record && record.targets && typeof record.targets === 'object') {
     Object.keys(record.targets).forEach(function (id) {
@@ -426,33 +463,44 @@ function dayStats(key) {
           if (unit === null) unit = current.unit;
         }
       }
-      entries.push({ id: id, name: name, target: target, done: done, amount: amount, unit: unit });
-      totalTarget += target;
-      totalDone += done;
+      var skipped = isSkippedIn(record, id);
+      pushEntry({
+        id: id, name: name, target: target, done: done, amount: amount, unit: unit,
+        skipped: skipped, countedDone: skipped ? 0 : done
+      });
     });
   } else {
     state.exercises.forEach(function (ex) {
       var target = targetSetsFor(ex, short);
       var doneRaw = record && record.done && typeof record.done[ex.id] === 'number' ? record.done[ex.id] : 0;
       var done = Math.min(doneRaw, target);
-      entries.push({ id: ex.id, name: ex.name, target: target, done: done, amount: ex.amount, unit: ex.unit });
-      totalTarget += target;
-      totalDone += done;
+      var skipped = isSkippedIn(record, ex.id);
+      pushEntry({
+        id: ex.id, name: ex.name, target: target, done: done, amount: ex.amount, unit: ex.unit,
+        skipped: skipped, countedDone: skipped ? 0 : done
+      });
     });
     /* 現在の種目に無いIDの記録があっても壊れないように名前だけ拾う */
     if (record && record.done) {
       Object.keys(record.done).forEach(function (id) {
         var known = state.exercises.some(function (ex) { return ex.id === id; });
         if (!known) {
-          entries.push({ id: id, name: '削除済みの種目', target: 0, done: 0, amount: null, unit: null });
+          entries.push({ id: id, name: '削除済みの種目', target: 0, done: 0, amount: null, unit: null, skipped: false, countedDone: 0 });
         }
       });
     }
   }
 
-  var rate = totalTarget > 0 ? Math.round((totalDone / totalTarget) * 100) : 0;
-  var complete = totalTarget > 0 && totalDone >= totalTarget;
-  return { entries: entries, totalTarget: totalTarget, totalDone: totalDone, rate: rate, complete: complete, short: short };
+  /* 完了 = 目標のある種目がすべて「完了またはスキップ」（R9） */
+  var countable = entries.filter(function (e) { return e.target > 0; });
+  var complete = countable.length > 0 && countable.every(function (e) {
+    return e.skipped || e.done >= e.target;
+  });
+  var rate = totalTarget > 0 ? Math.round((totalDone / totalTarget) * 100) : (complete ? 100 : 0);
+  return {
+    entries: entries, totalTarget: totalTarget, totalDone: totalDone,
+    rate: rate, complete: complete, short: short, skippedCount: skippedCount
+  };
 }
 
 /* 連続日数: トレーニングする日だけを対象に、完了が何日続いているかを数える。
@@ -515,7 +563,8 @@ function periodStats(start, end) {
     stats.entries.forEach(function (entry) {
       if (entry.unit === '回' && typeof entry.amount === 'number') {
         result.repsKnown = true;
-        result.reps += entry.done * entry.amount;
+        /* スキップした種目は数えない（countedDone はスキップ時 0）（R9） */
+        result.reps += entry.countedDone * entry.amount;
       }
     });
     cursor = addDays(cursor, 1);
@@ -589,10 +638,10 @@ function exerciseTotals() {
         names.push(entry.name);
       }
       var total = byName[entry.name];
-      total.sets += entry.done;
+      total.sets += entry.countedDone;
       if (entry.unit === '回' && typeof entry.amount === 'number') {
         total.repsKnown = true;
-        total.reps += entry.done * entry.amount;
+        total.reps += entry.countedDone * entry.amount;
       }
     });
   });
@@ -641,7 +690,7 @@ function allTimeTotals() {
     totals.totalSets += stats.totalDone;
     stats.entries.forEach(function (entry) {
       if (entry.unit === '回' && typeof entry.amount === 'number') {
-        totals.totalReps += entry.done * entry.amount;
+        totals.totalReps += entry.countedDone * entry.amount;
       }
     });
   });
@@ -777,6 +826,33 @@ function cacheElements() {
   el.navMenu = document.getElementById('nav-menu');
   el.navMypage = document.getElementById('nav-mypage');
   el.navSettings = document.getElementById('nav-settings');
+  el.navBottomToday = document.getElementById('nav-b-today');
+  el.navBottomMenu = document.getElementById('nav-b-menu');
+  el.navBottomMypage = document.getElementById('nav-b-mypage');
+  el.navBottomSettings = document.getElementById('nav-b-settings');
+  el.toast = document.getElementById('toast');
+  el.startPreset = document.getElementById('start-preset');
+  el.presetButtons = document.getElementById('preset-buttons');
+  el.presetFullBtn = document.getElementById('preset-full-btn');
+  el.presetLightBtn = document.getElementById('preset-light-btn');
+  el.presetOkBtn = document.getElementById('preset-ok-btn');
+  el.presetNote = document.getElementById('preset-note');
+  el.allDoneBtn = document.getElementById('all-done-btn');
+  el.completeUndo = document.getElementById('complete-undo');
+  el.completeUndoText = document.getElementById('complete-undo-text');
+  el.completeUndoBtn = document.getElementById('complete-undo-btn');
+  el.templateList = document.getElementById('template-list');
+  el.templateStatus = document.getElementById('template-status');
+  el.bulkEditBtn = document.getElementById('bulk-edit-btn');
+  el.bulkSaveBtn = document.getElementById('bulk-save-btn');
+  el.bulkCancelBtn = document.getElementById('bulk-cancel-btn');
+  el.addExample = document.getElementById('add-example');
+  el.transferShowBtn = document.getElementById('transfer-show-btn');
+  el.transferCopyBtn = document.getElementById('transfer-copy-btn');
+  el.transferCodeOut = document.getElementById('transfer-code-out');
+  el.transferCodeIn = document.getElementById('transfer-code-in');
+  el.transferLoadBtn = document.getElementById('transfer-load-btn');
+  el.calendarEdit = document.getElementById('calendar-edit');
   el.viewToday = document.getElementById('view-today');
   el.viewMenu = document.getElementById('view-menu');
   el.viewMypage = document.getElementById('view-mypage');
@@ -842,6 +918,31 @@ function announce(message) {
   if (el.liveRegion) el.liveRegion.textContent = message;
 }
 
+/* 保存したことを知らせる小さなトースト（R10）。約1.5秒で消える。
+   保存失敗の警告バナー（#23）とは別の、成功側のフィードバック。 */
+var toastTimer = null;
+function showToast(message) {
+  if (!el.toast) return;
+  el.toast.textContent = message || '保存しました';
+  el.toast.hidden = false;
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () {
+    if (el.toast) el.toast.hidden = true;
+    toastTimer = null;
+  }, 1500);
+}
+
+/* 要素が見える位置までスクロールする（対応しない環境では何もしない）。 */
+function scrollIntoViewSafe(node) {
+  if (node && typeof node.scrollIntoView === 'function') {
+    try {
+      node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    } catch (e) {
+      try { node.scrollIntoView(); } catch (e2) { /* スクロールできなくても続行する */ }
+    }
+  }
+}
+
 function makeButton(className, text, ariaLabel) {
   var btn = document.createElement('button');
   btn.type = 'button';
@@ -852,6 +953,65 @@ function makeButton(className, text, ariaLabel) {
 }
 
 // ===== 描画: 今日 =====
+/* 今日のその種目の目標セット数。スナップショット（素のセット数）を優先し（#25）、
+   無ければ現在の種目設定から決める。短縮日は shortGoalSets で絞る。 */
+function todayTargetFor(record, ex, short) {
+  if (record && record.targets && typeof record.targets[ex.id] === 'number') {
+    return short ? Math.min(record.targets[ex.id], state.settings.shortGoalSets) : record.targets[ex.id];
+  }
+  return targetSetsFor(ex, short);
+}
+
+/* 今日の予定表示（R13）: その日の状態と、その理由（設定の曜日か、今日だけの切替か）を添える。 */
+function todayScheduleText(key, date, kind) {
+  if (kind === 'rest') {
+    return '今日は休みの日です（設定で休みの日に選んだ曜日です）';
+  }
+  var text = '今日はトレーニングの日' + (kind === 'short' ? '（短縮）' : '');
+  var timeText = timeTextFor();
+  if (timeText) text += '・' + timeText;
+  var record = getRecord(key);
+  var recordShort = record && typeof record.short === 'boolean' ? record.short : null;
+  var reason = '';
+  if (kind === 'short') {
+    reason = recordShort === true && !defaultShortFor(date)
+      ? '今日だけ短縮モードにしました'
+      : '設定で短縮日に選んだ曜日です';
+  } else if (recordShort === false && defaultShortFor(date)) {
+    reason = '設定では短縮日ですが、今日は短縮モードをオフにしました';
+  }
+  if (reason) text += '（' + reason + '）';
+  return text;
+}
+
+/* 種目がはじめの6種目のままかどうか（R12の開始プリセット表示判定）。 */
+function isInitialMenu() {
+  if (state.exercises.length !== SEED_EXERCISES.length) return false;
+  return SEED_EXERCISES.every(function (seed) {
+    return state.exercises.some(function (ex) { return ex.id === seed.id; });
+  });
+}
+
+/* ライト化した直後だけ開始プリセット枠を出し続けるためのセッション内フラグ（R12）。 */
+var presetJustLightened = false;
+
+/* 今日が完了に切り替わった瞬間を検知するための前回状態（R17）。 */
+var prevTodayComplete = null;
+
+/* 完了した瞬間のフィードバック（R17）: バナーの軽いアニメーションと、
+   対応端末では短い振動を1回だけ。失敗しても無視する。 */
+function celebrateCompletion() {
+  if (el.doneBanner) {
+    el.doneBanner.classList.add('done-banner--celebrate');
+    setTimeout(function () {
+      if (el.doneBanner) el.doneBanner.classList.remove('done-banner--celebrate');
+    }, 800);
+  }
+  if (typeof navigator !== 'undefined' && navigator && typeof navigator.vibrate === 'function') {
+    try { navigator.vibrate(80); } catch (e) { /* 振動できない環境では何もしない */ }
+  }
+}
+
 function renderToday() {
   var date = todayDate();
   var key = dateKeyOf(date);
@@ -861,6 +1021,15 @@ function renderToday() {
 
   /* 初回の案内は、閉じるまで今日ビューの先頭に出す（#1） */
   if (el.guideCard) el.guideCard.hidden = state.prefs.guideDismissed;
+
+  /* 開始プリセット（R12）: 種目が初期状態で、まだ選択していないときだけ出す */
+  if (el.startPreset) {
+    var showPreset = !state.prefs.startPresetDone && (isInitialMenu() || presetJustLightened);
+    el.startPreset.hidden = !showPreset;
+    if (el.presetButtons) el.presetButtons.hidden = presetJustLightened;
+    if (el.presetOkBtn) el.presetOkBtn.hidden = !presetJustLightened;
+    if (el.presetNote) el.presetNote.hidden = !presetJustLightened;
+  }
 
   el.todayDate.textContent = formatDateJa(date);
 
@@ -876,47 +1045,45 @@ function renderToday() {
     el.weekProgress.textContent = '今週の完了' + weekProgress.done + '日（今週のトレーニング日は残り' + weekProgress.remaining + '日）';
   }
 
-  /* 今日の予定: その日の種別と時間設定を表示する */
+  /* 今日の予定: その日の種別と時間設定に、状態の理由も添える（R13） */
   var kind = dayKindFor(key, date);
-  if (kind === 'rest') {
-    el.todaySchedule.textContent = '今日は休みの日です';
-  } else {
-    var scheduleText = '今日はトレーニングの日' + (kind === 'short' ? '（短縮）' : '');
-    var timeText = timeTextFor();
-    if (timeText) scheduleText += '・' + timeText;
-    el.todaySchedule.textContent = scheduleText;
-  }
+  el.todaySchedule.textContent = todayScheduleText(key, date, kind);
 
   el.adviceText.textContent = pickAdvice();
   el.restBanner.hidden = kind !== 'rest';
 
-  var rate = stats.totalTarget > 0 ? Math.round((stats.totalDone / stats.totalTarget) * 100) : 0;
-  el.progressBar.style.width = rate + '%';
-  el.progressTrack.setAttribute('aria-valuenow', String(rate));
-  el.progressText.textContent = stats.totalDone + ' / ' + stats.totalTarget + ' セット完了（' + rate + '%）' +
-    (short ? ' ・短縮モード中' : '');
+  el.progressBar.style.width = stats.rate + '%';
+  el.progressTrack.setAttribute('aria-valuenow', String(stats.rate));
+  el.progressText.textContent = stats.totalDone + ' / ' + stats.totalTarget + ' セット完了（' + stats.rate + '%）' +
+    (short ? ' ・短縮モード中' : '') +
+    (stats.skippedCount > 0 ? ' ・スキップ' + stats.skippedCount + '種目' : '');
 
   el.doneBanner.hidden = !stats.complete;
 
+  /* 完了への切り替わりを検知してフィードバックする（R17）。
+     初回表示（prevTodayComplete が null）では鳴らさない。 */
+  if (prevTodayComplete === false && stats.complete) {
+    celebrateCompletion();
+  }
+  prevTodayComplete = stats.complete;
+
   el.shortToggle.checked = short;
+
+  if (el.allDoneBtn) {
+    el.allDoneBtn.disabled = state.exercises.length === 0 || stats.complete;
+  }
 
   el.todayList.textContent = '';
   el.todayEmpty.hidden = state.exercises.length > 0;
 
   state.exercises.forEach(function (ex) {
-    /* 今日の目標は、その日のスナップショット（素のセット数）を優先する（#25）。
-       スナップショットがまだ無い種目は現在の設定から決める。 */
-    var target;
-    if (record && record.targets && typeof record.targets[ex.id] === 'number') {
-      target = short ? Math.min(record.targets[ex.id], state.settings.shortGoalSets) : record.targets[ex.id];
-    } else {
-      target = targetSetsFor(ex, short);
-    }
+    var target = todayTargetFor(record, ex, short);
     var doneCount = record && record.done && typeof record.done[ex.id] === 'number' ? record.done[ex.id] : 0;
     doneCount = Math.min(doneCount, target);
+    var skipped = isSkippedIn(record, ex.id);
 
     var li = document.createElement('li');
-    li.className = 'exercise-row';
+    li.className = 'exercise-row' + (skipped ? ' exercise-row--skipped' : '');
 
     var info = document.createElement('div');
     var name = document.createElement('h3');
@@ -926,6 +1093,21 @@ function renderToday() {
     targetText.textContent = ex.amount + ex.unit + ' × ' + target + 'セット';
     info.appendChild(name);
     info.appendChild(targetText);
+
+    /* 種目ごとの進捗と状態（R5）: ○/○セットと、未実施／途中／完了／スキップ中を文字と色で出す */
+    var progress = document.createElement('p');
+    if (skipped) {
+      progress.className = 'exercise-row__progress exercise-row__progress--skipped';
+      progress.textContent = 'スキップ中（今日の完了条件からは外れます）';
+    } else {
+      var statusLabel = doneCount >= target ? '完了' : (doneCount > 0 ? '途中' : '未実施');
+      progress.className = 'exercise-row__progress ' +
+        (doneCount >= target ? 'exercise-row__progress--done'
+          : doneCount > 0 ? 'exercise-row__progress--partial' : 'exercise-row__progress--todo');
+      progress.textContent = doneCount + '/' + target + ' セット（' + statusLabel + '）';
+    }
+    info.appendChild(progress);
+
     if (ex.note) {
       var note = document.createElement('p');
       note.className = 'exercise-row__note';
@@ -945,7 +1127,7 @@ function renderToday() {
       (function (index) {
         var isDone = index < doneCount;
         /* 押せるのは「次にやるセット」と「最後に完了したセット（取り消し）」だけ（#7）。
-           飛ばし押しはできない。 */
+           飛ばし押しはできない。スキップ中は押せない（R9）。 */
         var isNext = index === doneCount;
         var isUndoable = doneCount > 0 && index === doneCount - 1;
         var btn = makeButton(
@@ -955,7 +1137,7 @@ function renderToday() {
             (isNext && !isDone ? '（次はこれ）' : '')
         );
         btn.setAttribute('aria-pressed', isDone ? 'true' : 'false');
-        btn.disabled = !(isNext || isUndoable);
+        btn.disabled = skipped || !(isNext || isUndoable);
         btn.addEventListener('click', function () {
           toggleSet(ex.id, index, short);
         });
@@ -963,6 +1145,26 @@ function renderToday() {
       })(i);
     }
     li.appendChild(setsWrap);
+
+    /* 行の操作: 一括完了（R4）／今日だけスキップ（R9）／メニューでの編集（R1） */
+    var actions = document.createElement('div');
+    actions.className = 'exercise-row__actions';
+
+    var completeBtn = makeButton('btn btn--small', 'この種目を完了', ex.name + 'の全セットを完了にする');
+    completeBtn.disabled = skipped || doneCount >= target;
+    completeBtn.addEventListener('click', function () { completeExercise(ex.id, short); });
+    actions.appendChild(completeBtn);
+
+    var skipBtn = makeButton('btn btn--small', skipped ? 'スキップを取り消す' : '今日はスキップ',
+      ex.name + (skipped ? 'のスキップを取り消す' : 'を今日だけスキップする'));
+    skipBtn.addEventListener('click', function () { toggleSkipToday(ex.id, short); });
+    actions.appendChild(skipBtn);
+
+    var editBtn = makeButton('btn btn--small', '編集', ex.name + 'をメニュー画面で編集');
+    editBtn.addEventListener('click', function () { openExerciseEditor(ex.id); });
+    actions.appendChild(editBtn);
+
+    li.appendChild(actions);
     el.todayList.appendChild(li);
   });
 }
@@ -977,8 +1179,109 @@ function toggleSet(exerciseId, setIndex, short) {
   saveRecords();
   renderToday();
   renderHistory();
+  showToast('保存しました');
   var ex = state.exercises.find(function (e) { return e.id === exerciseId; });
   announce((ex ? ex.name : '種目') + ' ' + (setIndex + 1) + 'セット目を' + (next > setIndex ? '完了にしました' : '未完了に戻しました'));
+}
+
+/* その種目の全セットを完了にする（R4）。戻すときは通常のセット取り消しを使う。 */
+function completeExercise(exerciseId, short) {
+  var ex = state.exercises.find(function (e) { return e.id === exerciseId; });
+  if (!ex) return;
+  var record = ensureTodayRecord(short);
+  record.done[exerciseId] = todayTargetFor(record, ex, short);
+  saveRecords();
+  renderToday();
+  renderHistory();
+  showToast('保存しました');
+  announce(ex.name + 'を完了にしました');
+}
+
+/* 今日の全種目を完了にする（R4）。確認は出さず即実行し、直後だけ「元に戻す」を出す。
+   スキップ中の種目はそのままにする。 */
+var lastCompleteAll = null;
+var completeUndoTimer = null;
+
+function hideCompleteUndo() {
+  lastCompleteAll = null;
+  if (completeUndoTimer) {
+    clearTimeout(completeUndoTimer);
+    completeUndoTimer = null;
+  }
+  if (el.completeUndo) el.completeUndo.hidden = true;
+}
+
+function completeAllToday() {
+  var date = todayDate();
+  var key = dateKeyOf(date);
+  var short = effectiveShort(key, date);
+  var prevRecord = getRecord(key);
+  lastCompleteAll = { key: key, record: prevRecord ? clone(prevRecord) : null };
+  var record = ensureTodayRecord(short);
+  state.exercises.forEach(function (ex) {
+    if (isSkippedIn(record, ex.id)) return;
+    record.done[ex.id] = todayTargetFor(record, ex, short);
+  });
+  saveRecords();
+  renderToday();
+  renderHistory();
+  showToast('保存しました');
+  if (el.completeUndoText) el.completeUndoText.textContent = 'すべての種目を完了にしました。';
+  if (el.completeUndo) el.completeUndo.hidden = false;
+  if (completeUndoTimer) clearTimeout(completeUndoTimer);
+  completeUndoTimer = setTimeout(hideCompleteUndo, 6000);
+  announce('すべての種目を完了にしました');
+}
+
+function undoCompleteAll() {
+  if (!lastCompleteAll) return;
+  var saved = lastCompleteAll;
+  hideCompleteUndo();
+  if (saved.record === null) {
+    delete state.records[saved.key];
+  } else {
+    state.records[saved.key] = saved.record;
+  }
+  saveRecords();
+  renderToday();
+  renderHistory();
+  showToast('元に戻しました');
+  announce('完了を取り消しました');
+}
+
+/* 今日だけその種目をスキップする／取り消す（R9）。
+   スキップは記録に残るが、完了条件と集計からは外れる。 */
+function toggleSkipToday(exerciseId, short) {
+  var ex = state.exercises.find(function (e) { return e.id === exerciseId; });
+  var record = ensureTodayRecord(short);
+  if (!record.skipped || typeof record.skipped !== 'object') record.skipped = {};
+  var nowSkipped;
+  if (record.skipped[exerciseId] === true) {
+    delete record.skipped[exerciseId];
+    nowSkipped = false;
+  } else {
+    record.skipped[exerciseId] = true;
+    nowSkipped = true;
+  }
+  saveRecords();
+  renderToday();
+  renderHistory();
+  showToast('保存しました');
+  announce((ex ? ex.name : '種目') + (nowSkipped ? 'を今日はスキップにしました' : 'のスキップを取り消しました'));
+}
+
+/* 今日画面から、その種目の編集フォームを開いた状態でメニュー画面へ移る（R1）。 */
+function openExerciseEditor(exerciseId) {
+  var ex = state.exercises.find(function (e) { return e.id === exerciseId; });
+  editingExerciseId = exerciseId;
+  showView('menu');
+  renderManage();
+  var input = document.getElementById('edit-field-' + exerciseId + '-1');
+  if (input) {
+    scrollIntoViewSafe(input);
+    if (typeof input.focus === 'function') input.focus();
+  }
+  announce((ex ? ex.name : '種目') + 'の編集を開きました');
 }
 
 // ===== 描画: 種目の管理 =====
@@ -1014,6 +1317,7 @@ function deleteExercise(ex, index) {
   saveExercises();
   renderAll();
   showUndoBar(ex, index);
+  showToast('保存しました');
   announce(ex.name + 'を削除しました');
 }
 
@@ -1025,19 +1329,55 @@ function undoDelete() {
   hideUndoBar();
   saveExercises();
   renderAll();
+  showToast('保存しました');
   announce(item.exercise.name + 'を元に戻しました');
 }
 
+/* まとめて編集モード（R3）。ONのときは一覧が入力欄になり、
+   数値・単位・セット数を一度に変更できる（名前とメモは個別編集のまま）。 */
+var bulkEditMode = false;
+var bulkInputs = {};
+
+function renderBulkControls() {
+  if (el.bulkEditBtn) el.bulkEditBtn.hidden = bulkEditMode;
+  if (el.bulkSaveBtn) el.bulkSaveBtn.hidden = !bulkEditMode;
+  if (el.bulkCancelBtn) el.bulkCancelBtn.hidden = !bulkEditMode;
+}
+
 function renderManage() {
+  renderBulkControls();
+  renderTemplates();
+  bulkInputs = {};
   el.manageList.textContent = '';
   state.exercises.forEach(function (ex, index) {
     var li = document.createElement('li');
     li.className = 'manage-row';
+    li.setAttribute('data-exercise-id', ex.id);
 
+    if (bulkEditMode) {
+      /* まとめて編集（R3）: 名前は表示のみ、数値・単位・セット数が入力欄になる */
+      var bulkName = document.createElement('p');
+      bulkName.className = 'manage-row__name';
+      bulkName.textContent = ex.name;
+      li.appendChild(bulkName);
+      li.appendChild(buildBulkEditFields(ex));
+      el.manageList.appendChild(li);
+      return;
+    }
+
+    /* ドラッグハンドルと名前（R7）。キーボード操作は「上へ／下へ」ボタンで担保する */
+    var head = document.createElement('div');
+    head.className = 'manage-row__head';
+    if (editingExerciseId !== ex.id) {
+      var handle = makeButton('drag-handle', '⠿', ex.name + 'をドラッグで並び替え');
+      attachDragHandle(handle, li, index);
+      head.appendChild(handle);
+    }
     var name = document.createElement('p');
     name.className = 'manage-row__name';
     name.textContent = ex.name;
-    li.appendChild(name);
+    head.appendChild(name);
+    li.appendChild(head);
 
     if (editingExerciseId === ex.id) {
       li.appendChild(buildExerciseEditForm(ex, index));
@@ -1080,6 +1420,226 @@ function renderManage() {
   });
 }
 
+/* まとめて編集の入力欄（R3）: 数値・単位・セット数だけを並べる。 */
+function buildBulkEditFields(ex) {
+  var wrap = document.createElement('div');
+  wrap.className = 'manage-row__bulk';
+  var inputs = {};
+
+  function addBulkField(labelText, input) {
+    var field = document.createElement('div');
+    field.className = 'field';
+    var label = document.createElement('label');
+    label.className = 'field__label';
+    label.textContent = labelText;
+    input.id = 'bulk-field-' + ex.id + '-' + labelText;
+    label.htmlFor = input.id;
+    field.appendChild(label);
+    field.appendChild(input);
+    wrap.appendChild(field);
+    return input;
+  }
+
+  var amountInput = document.createElement('input');
+  amountInput.type = 'number';
+  amountInput.min = '1';
+  amountInput.max = '999';
+  amountInput.value = String(ex.amount);
+  inputs.amount = addBulkField('1セットの回数・時間', amountInput);
+
+  var unitSelect = document.createElement('select');
+  ['回', '秒'].forEach(function (u) {
+    var opt = document.createElement('option');
+    opt.value = u;
+    opt.textContent = u;
+    if (ex.unit === u) opt.selected = true;
+    unitSelect.appendChild(opt);
+  });
+  inputs.unit = addBulkField('単位（回数・秒数）', unitSelect);
+
+  var setsInput = document.createElement('input');
+  setsInput.type = 'number';
+  setsInput.min = '1';
+  setsInput.max = '10';
+  setsInput.value = String(ex.sets);
+  inputs.sets = addBulkField('セット数（何回繰り返すか）', setsInput);
+
+  bulkInputs[ex.id] = inputs;
+  return wrap;
+}
+
+/* まとめて保存（R3）: 入力欄の値を全種目に一括反映する。
+   実際に変わった種目は、今日の目標への反映確認（R8）もまとめて行う。 */
+function saveBulkEdit() {
+  var changes = [];
+  state.exercises.forEach(function (ex) {
+    var inputs = bulkInputs[ex.id];
+    if (!inputs) return;
+    var amount = toInt(inputs.amount.value, ex.amount, 1, 999);
+    var unit = inputs.unit.value === '秒' ? '秒' : '回';
+    var sets = toInt(inputs.sets.value, ex.sets, 1, 10);
+    if (amount !== ex.amount || unit !== ex.unit || sets !== ex.sets) {
+      ex.amount = amount;
+      ex.unit = unit;
+      ex.sets = sets;
+      changes.push({ id: ex.id, name: ex.name, amount: amount, unit: unit, sets: sets });
+    }
+  });
+  bulkEditMode = false;
+  saveExercises();
+  if (changes.length > 0) reflectEditsToToday(changes);
+  renderManage();
+  renderToday();
+  renderHistory();
+  showToast('保存しました');
+  announce('まとめて保存しました');
+}
+
+function cancelBulkEdit() {
+  bulkEditMode = false;
+  renderManage();
+  announce('まとめて編集をやめました');
+}
+
+/* 種目の編集を保存したとき、今日の記録（スナップショット）がすでにあれば、
+   今日の目標にも反映するか確認する（R8）。反映しても完了済みセット数は変えない。
+   changes: [{ id, name, amount, unit, sets }]（新しい値、変わったものだけ）。 */
+function reflectEditsToToday(changes) {
+  var key = dateKeyOf(todayDate());
+  var record = getRecord(key);
+  if (!record || !record.targets || typeof record.targets !== 'object') return false;
+  var applicable = changes.filter(function (c) {
+    return typeof record.targets[c.id] === 'number';
+  });
+  if (applicable.length === 0) return false;
+  if (!window.confirm('今日の記録がすでにあります。変更を今日の目標にも反映しますか？\n（「キャンセル（いいえ）」なら、明日の目標から反映されます。完了済みのセット数は変わりません）')) {
+    return false;
+  }
+  if (!record.amounts || typeof record.amounts !== 'object') record.amounts = {};
+  if (!record.units || typeof record.units !== 'object') record.units = {};
+  if (!record.names || typeof record.names !== 'object') record.names = {};
+  applicable.forEach(function (c) {
+    record.targets[c.id] = c.sets;
+    record.amounts[c.id] = c.amount;
+    record.units[c.id] = c.unit;
+    record.names[c.id] = c.name;
+  });
+  saveRecords();
+  return true;
+}
+
+/* ドラッグ並び替え（R7）: ハンドルのポインター操作（マウス・タッチ両方）で
+   行を動かし、離した位置で確定する。 */
+function attachDragHandle(handle, li, index) {
+  handle.addEventListener('pointerdown', function (event) {
+    if (bulkEditMode || editingExerciseId) return;
+    if (typeof event.button === 'number' && event.button > 0) return;
+    event.preventDefault();
+    var rows = Array.prototype.slice.call(el.manageList.children);
+    var startY = event.clientY;
+    var targetIndex = index;
+    li.classList.add('manage-row--dragging');
+    if (typeof handle.setPointerCapture === 'function' && event.pointerId !== undefined) {
+      try { handle.setPointerCapture(event.pointerId); } catch (e) { /* 捕捉できなくても続行 */ }
+    }
+
+    function onMove(ev) {
+      li.style.transform = 'translateY(' + (ev.clientY - startY) + 'px)';
+      /* ポインターより上にある他の行の数が、そのまま挿入位置になる */
+      var count = 0;
+      rows.forEach(function (row) {
+        if (row === li || typeof row.getBoundingClientRect !== 'function') return;
+        var rect = row.getBoundingClientRect();
+        if (ev.clientY > rect.top + rect.height / 2) count += 1;
+      });
+      targetIndex = count;
+    }
+
+    function onUp() {
+      handle.removeEventListener('pointermove', onMove);
+      handle.removeEventListener('pointerup', onUp);
+      handle.removeEventListener('pointercancel', onUp);
+      li.classList.remove('manage-row--dragging');
+      li.style.transform = '';
+      if (targetIndex !== index) {
+        var item = state.exercises.splice(index, 1)[0];
+        state.exercises.splice(targetIndex, 0, item);
+        saveExercises();
+        renderManage();
+        renderToday();
+        showToast('保存しました');
+        announce(item.name + 'を移動しました');
+      }
+    }
+
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp);
+    handle.addEventListener('pointercancel', onUp);
+  });
+}
+
+/* テンプレート一覧（R2）。同じ名前の種目がある場合は「追加済み」にして押せなくする。 */
+function renderTemplates() {
+  if (!el.templateList) return;
+  el.templateList.textContent = '';
+  EXERCISE_TEMPLATES.forEach(function (tpl, tplIndex) {
+    var li = document.createElement('li');
+    li.className = 'template-row';
+
+    var texts = document.createElement('div');
+    var name = document.createElement('span');
+    name.className = 'template-row__name';
+    name.textContent = tpl.name;
+    var spec = document.createElement('span');
+    spec.className = 'template-row__spec';
+    spec.textContent = ' ' + tpl.amount + tpl.unit + ' × ' + tpl.sets + 'セット' +
+      (tpl.note ? '（' + tpl.note + '）' : '');
+    texts.appendChild(name);
+    texts.appendChild(spec);
+    li.appendChild(texts);
+
+    var exists = state.exercises.some(function (ex) { return ex.name === tpl.name; });
+    var btn = makeButton('btn btn--small', exists ? '追加済み' : '追加', tpl.name + 'をテンプレートから追加');
+    btn.disabled = exists;
+    if (!exists) {
+      btn.addEventListener('click', function () { addFromTemplate(tplIndex); });
+    }
+    li.appendChild(btn);
+    el.templateList.appendChild(li);
+  });
+}
+
+function addFromTemplate(tplIndex) {
+  var tpl = EXERCISE_TEMPLATES[tplIndex];
+  if (!tpl) return;
+  if (state.exercises.some(function (ex) { return ex.name === tpl.name; })) {
+    if (el.templateStatus) el.templateStatus.textContent = '「' + tpl.name + '」はすでに追加されています。';
+    announce(tpl.name + 'はすでに追加されています');
+    return;
+  }
+  var ex = sanitizeExercise(clone(tpl));
+  if (!ex) return;
+  state.exercises.push(ex);
+  saveExercises();
+  renderAll();
+  if (el.templateStatus) el.templateStatus.textContent = '「' + tpl.name + '」を追加しました。';
+  announce(tpl.name + 'を追加しました');
+  showToast('保存しました');
+  scrollToExerciseRow(ex.id);
+}
+
+/* 管理リストの中で、その種目の行が見える位置へスクロールする（R11）。 */
+function scrollToExerciseRow(exerciseId) {
+  if (!el.manageList) return;
+  var rows = el.manageList.children;
+  for (var i = 0; i < rows.length; i++) {
+    if (typeof rows[i].getAttribute === 'function' && rows[i].getAttribute('data-exercise-id') === exerciseId) {
+      scrollIntoViewSafe(rows[i]);
+      return;
+    }
+  }
+}
+
 /* 種目の編集フォーム（#9）: 名前・数値・単位・セット数・メモをまとめて編集し、
    保存／キャンセルで確定する。即時の数値入力は廃止した。 */
 function buildExerciseEditForm(ex, index) {
@@ -1118,7 +1678,7 @@ function buildExerciseEditForm(ex, index) {
   amountInput.max = '999';
   amountInput.required = true;
   amountInput.value = String(ex.amount);
-  addField('数値', amountInput, false);
+  addField('1セットの回数・時間', amountInput, false);
 
   var unitSelect = document.createElement('select');
   ['回', '秒'].forEach(function (u) {
@@ -1128,7 +1688,7 @@ function buildExerciseEditForm(ex, index) {
     if (ex.unit === u) opt.selected = true;
     unitSelect.appendChild(opt);
   });
-  addField('単位', unitSelect, false);
+  addField('単位（回数・秒数）', unitSelect, false);
 
   var setsInput = document.createElement('input');
   setsInput.type = 'number';
@@ -1136,7 +1696,7 @@ function buildExerciseEditForm(ex, index) {
   setsInput.max = '10';
   setsInput.required = true;
   setsInput.value = String(ex.sets);
-  addField('セット数', setsInput, false);
+  addField('セット数（何回繰り返すか）', setsInput, false);
 
   var noteInput = document.createElement('input');
   noteInput.type = 'text';
@@ -1145,6 +1705,20 @@ function buildExerciseEditForm(ex, index) {
   addField('メモ（任意）', noteInput, true);
 
   form.appendChild(grid);
+
+  /* 完成形の例（R16）: 入力に合わせて「例: 腕立て伏せ 20回 × 2セット」を出す */
+  var example = document.createElement('p');
+  example.className = 'settings-hint';
+  function updateExample() {
+    example.textContent = '例: ' + (nameInput.value.trim() || '種目') + ' ' +
+      (amountInput.value || '0') + unitSelect.value + ' × ' + (setsInput.value || '0') + 'セット';
+  }
+  [nameInput, amountInput, setsInput, unitSelect].forEach(function (input) {
+    input.addEventListener('input', updateExample);
+    input.addEventListener('change', updateExample);
+  });
+  updateExample();
+  form.appendChild(example);
 
   var actions = document.createElement('div');
   actions.className = 'data-actions__row';
@@ -1175,12 +1749,17 @@ function buildExerciseEditForm(ex, index) {
       announce('名前を入力してください');
       return;
     }
+    var changed = cleaned.name !== ex.name || cleaned.amount !== ex.amount ||
+      cleaned.unit !== ex.unit || cleaned.sets !== ex.sets;
     state.exercises[index] = cleaned;
     editingExerciseId = null;
     saveExercises();
+    /* 今日の記録がある場合は、今日の目標への反映を確認する（R8） */
+    if (changed) reflectEditsToToday([cleaned]);
     renderManage();
     renderToday();
     renderHistory();
+    showToast('保存しました');
     announce(cleaned.name + 'を保存しました');
   });
 
@@ -1196,6 +1775,7 @@ function moveExercise(index, delta) {
   saveExercises();
   renderToday();
   renderManage();
+  showToast('保存しました');
 }
 
 // ===== 描画: 履歴 =====
@@ -1244,18 +1824,19 @@ function renderHistory() {
       li.appendChild(rateEl);
     }
 
-    /* 通常日・短縮日は内訳を出し、休みの日は記録がある分だけ出す */
-    if (stats.entries.length > 0 && (kind !== 'rest' || stats.totalDone > 0)) {
+    /* 通常日・短縮日は内訳を出し、休みの日は記録がある分だけ出す。
+       スキップした種目は「スキップ」と表示する（R9） */
+    if (stats.entries.length > 0 && (kind !== 'rest' || stats.totalDone > 0 || stats.skippedCount > 0)) {
       var detail = document.createElement('span');
       detail.className = 'history-row__detail';
       detail.textContent = stats.entries.map(function (e) {
-        return e.name + ' ' + e.done + '/' + e.target;
+        return e.skipped ? e.name + ' スキップ' : e.name + ' ' + e.done + '/' + e.target;
       }).join('、');
       li.appendChild(detail);
     }
 
-    /* 記録の編集（#8）: 目標のある種目が1つでもある日に「編集」を出す */
-    var hasEditable = stats.entries.some(function (e) { return e.target > 0; });
+    /* 記録の編集（#8）: 目標があり、スキップでない種目が1つでもある日に「編集」を出す */
+    var hasEditable = stats.entries.some(function (e) { return e.target > 0 && !e.skipped; });
     if (editingHistoryKey === key) {
       li.appendChild(buildHistoryEditForm(key, date, stats));
     } else if (hasEditable) {
@@ -1273,9 +1854,10 @@ function renderHistory() {
   }
 }
 
-/* 過去日の記録編集フォーム（#8）: その日のスナップショットをもとに、
-   各種目の完了セット数を変更できる。 */
-function buildHistoryEditForm(key, date, stats) {
+/* 記録編集フォーム（#8 / R14で共通化）: その日のスナップショットをもとに、
+   各種目の完了セット数を変更できる。スキップした種目は入力欄にせず注記だけ出す（R9）。
+   保存・キャンセルの後の動きは呼び出し側（履歴／カレンダー）が onSave / onCancel で決める。 */
+function buildRecordEditForm(key, date, stats, onSave, onCancel) {
   var wrap = document.createElement('div');
   wrap.className = 'history-edit';
 
@@ -1288,6 +1870,13 @@ function buildHistoryEditForm(key, date, stats) {
     nameEl.className = 'history-edit__name';
     nameEl.textContent = entry.name;
     row.appendChild(nameEl);
+    if (entry.skipped) {
+      var skippedEl = document.createElement('span');
+      skippedEl.textContent = 'スキップ中（この画面では変更できません）';
+      row.appendChild(skippedEl);
+      wrap.appendChild(row);
+      return;
+    }
     var input = document.createElement('input');
     input.type = 'number';
     input.min = '0';
@@ -1306,20 +1895,32 @@ function buildHistoryEditForm(key, date, stats) {
   actions.className = 'data-actions__row';
   var saveBtn = makeButton('btn btn--primary btn--small', '保存', formatDateJa(date) + 'の記録を保存');
   saveBtn.addEventListener('click', function () {
-    saveHistoryEdit(key, date, stats, inputs);
+    applyRecordEdit(key, date, stats, inputs);
+    onSave();
   });
   actions.appendChild(saveBtn);
   var cancelBtn = makeButton('btn btn--small', 'キャンセル', '編集をやめる');
-  cancelBtn.addEventListener('click', function () {
-    editingHistoryKey = null;
-    renderHistory();
-  });
+  cancelBtn.addEventListener('click', onCancel);
   actions.appendChild(cancelBtn);
   wrap.appendChild(actions);
   return wrap;
 }
 
-function saveHistoryEdit(key, date, stats, inputs) {
+/* 履歴用の記録編集フォーム（#8）。 */
+function buildHistoryEditForm(key, date, stats) {
+  return buildRecordEditForm(key, date, stats, function () {
+    editingHistoryKey = null;
+    renderAll();
+    showToast('保存しました');
+    announce(formatDateJa(date) + 'の記録を保存しました');
+  }, function () {
+    editingHistoryKey = null;
+    renderHistory();
+  });
+}
+
+/* 記録編集の保存処理そのもの（#8 / R14）。履歴とカレンダーで共用する。 */
+function applyRecordEdit(key, date, stats, inputs) {
   var record = getRecord(key);
   if (!record) {
     /* 記録が無い日に付け足す場合は、その日の種別を固定して新規作成する */
@@ -1339,10 +1940,7 @@ function saveHistoryEdit(key, date, stats, inputs) {
     var target = entry ? entry.target : 0;
     record.done[id] = toInt(inputs[id].value, 0, 0, target);
   });
-  editingHistoryKey = null;
   saveRecords();
-  renderAll();
-  announce(formatDateJa(date) + 'の記録を保存しました');
 }
 
 // ===== 描画: 設定 =====
@@ -1373,9 +1971,11 @@ function renderSettings() {
   }
 }
 
-/* 設定を変えたときに「保存しました」を短時間出す（#13）。 */
+/* 設定を変えたときに「保存しました」を短時間出す（#13）。
+   あわせて画面下部のトーストでも知らせる（R10）。 */
 var savedNoteTimer = null;
 function notifySaved() {
+  showToast('保存しました');
   if (!el.settingsStatus) return;
   el.settingsStatus.textContent = '保存しました';
   if (savedNoteTimer) clearTimeout(savedNoteTimer);
@@ -1814,6 +2414,15 @@ function validateImportData(parsed) {
     if (rec.short !== undefined && typeof rec.short !== 'boolean') {
       return fail(key + ' の短縮フラグの形式が違います。');
     }
+    if (rec.skipped !== undefined) {
+      if (!isPlainObject(rec.skipped)) return fail(key + ' のスキップ記録の形式が違います。');
+      var skippedIds = Object.keys(rec.skipped);
+      for (var k = 0; k < skippedIds.length; k++) {
+        if (typeof rec.skipped[skippedIds[k]] !== 'boolean') {
+          return fail(key + ' のスキップ記録の形式が違います。');
+        }
+      }
+    }
     if (rec.dayType !== undefined && rec.dayType !== 'training' && rec.dayType !== 'rest') {
       return fail(key + ' の日種別の形式が違います。');
     }
@@ -1986,10 +2595,16 @@ function renderRivals() {
   });
 }
 
-/* カレンダー: 選んだ年・月の月カレンダー（月曜はじまり、表示専用）。
-   状態は色だけでなく記号でも区別する（凡例はHTML側に置いてある）。 */
+/* カレンダーで編集中の日付キーと、表示中の年月（R14）。 */
+var calendarEditKey = null;
+var calendarShown = { year: null, month: null };
+
+/* カレンダー: 選んだ年・月の月カレンダー（月曜はじまり）。
+   状態は色だけでなく記号でも区別する（凡例はHTML側に置いてある）。
+   記録がある日はボタンになっていて、タップすると下に記録の編集が開く（R14）。 */
 function renderCalendar(year, month) {
-  el.calendarNote.textContent = year + '年' + (month + 1) + '月のカレンダーです。';
+  calendarShown = { year: year, month: month };
+  el.calendarNote.textContent = year + '年' + (month + 1) + '月のカレンダーです。記録がある日をタップすると、その日の記録を編集できます。';
   el.calendar.textContent = '';
 
   var today = todayDate();
@@ -2048,16 +2663,40 @@ function renderCalendar(year, month) {
           td.classList.add('calendar__cell--today');
           statusText += '（今日）';
         }
-        td.setAttribute('aria-label', formatDateJa(date) + ' ' + statusText);
+        if (calendarEditKey === key) {
+          td.classList.add('calendar__cell--editing');
+        }
         var num = document.createElement('span');
         num.className = 'calendar__day-num';
         num.textContent = String(dayNum);
-        td.appendChild(num);
+        var mark = null;
         if (markText) {
-          var mark = document.createElement('span');
+          mark = document.createElement('span');
           mark.className = 'calendar__mark';
           mark.textContent = markText;
-          td.appendChild(mark);
+        }
+        /* 記録があり編集できる種目がある日は、日付をボタンにして編集を開けるようにする（R14） */
+        var editable = date <= today && !!getRecord(key) &&
+          stats.entries.some(function (e) { return e.target > 0; });
+        if (editable) {
+          var dayBtn = document.createElement('button');
+          dayBtn.type = 'button';
+          dayBtn.className = 'calendar__day-btn';
+          dayBtn.setAttribute('aria-label', formatDateJa(date) + ' ' + statusText + '。この日の記録を編集');
+          dayBtn.setAttribute('aria-expanded', calendarEditKey === key ? 'true' : 'false');
+          dayBtn.appendChild(num);
+          if (mark) dayBtn.appendChild(mark);
+          (function (k) {
+            dayBtn.addEventListener('click', function () {
+              calendarEditKey = calendarEditKey === k ? null : k;
+              renderCalendar(calendarShown.year, calendarShown.month);
+            });
+          })(key);
+          td.appendChild(dayBtn);
+        } else {
+          td.setAttribute('aria-label', formatDateJa(date) + ' ' + statusText);
+          td.appendChild(num);
+          if (mark) td.appendChild(mark);
         }
         dayNum += 1;
       }
@@ -2067,6 +2706,30 @@ function renderCalendar(year, month) {
   }
   table.appendChild(tbody);
   el.calendar.appendChild(table);
+  renderCalendarEdit();
+}
+
+/* カレンダーの下に出る記録の編集（R14）。保存・集計反映は履歴の編集と
+   同じ処理（buildRecordEditForm / applyRecordEdit）を使う。 */
+function renderCalendarEdit() {
+  if (!el.calendarEdit) return;
+  el.calendarEdit.textContent = '';
+  if (!calendarEditKey) return;
+  var key = calendarEditKey;
+  var date = parseKey(key);
+  var stats = dayStats(key);
+  var heading = document.createElement('h3');
+  heading.className = 'calendar-edit__heading';
+  heading.textContent = formatDateJa(date) + 'の記録を編集';
+  el.calendarEdit.appendChild(heading);
+  el.calendarEdit.appendChild(buildRecordEditForm(key, date, stats, function () {
+    renderMypage();
+    showToast('保存しました');
+    announce(formatDateJa(date) + 'の記録を保存しました');
+  }, function () {
+    calendarEditKey = null;
+    renderCalendar(calendarShown.year, calendarShown.month);
+  }));
 }
 
 /* 種目別の累計リスト（完了セット数の多い順） */
@@ -2096,15 +2759,22 @@ var VIEW_NAMES = ['today', 'menu', 'mypage', 'settings'];
 function showView(view) {
   currentView = VIEW_NAMES.indexOf(view) !== -1 ? view : 'today';
   var views = { today: el.viewToday, menu: el.viewMenu, mypage: el.viewMypage, settings: el.viewSettings };
-  var navs = { today: el.navToday, menu: el.navMenu, mypage: el.navMypage, settings: el.navSettings };
+  /* 上部ナビと下部固定ナビ（R6）の両方の状態をそろえる */
+  var navs = {
+    today: [el.navToday, el.navBottomToday],
+    menu: [el.navMenu, el.navBottomMenu],
+    mypage: [el.navMypage, el.navBottomMypage],
+    settings: [el.navSettings, el.navBottomSettings]
+  };
   VIEW_NAMES.forEach(function (name) {
     var isActive = name === currentView;
     if (views[name]) views[name].hidden = !isActive;
-    if (navs[name]) {
-      navs[name].classList.toggle('view-nav__btn--active', isActive);
-      if (isActive) navs[name].setAttribute('aria-current', 'page');
-      else navs[name].removeAttribute('aria-current');
-    }
+    (navs[name] || []).forEach(function (btn) {
+      if (!btn) return;
+      btn.classList.toggle('view-nav__btn--active', isActive);
+      if (isActive) btn.setAttribute('aria-current', 'page');
+      else btn.removeAttribute('aria-current');
+    });
   });
   if (currentView === 'mypage') renderMypage();
   try {
@@ -2133,6 +2803,144 @@ function setupCollapse(toggleId, bodyId) {
   });
 }
 
+// ===== データの受け渡し（エクスポート／インポート／引き継ぎコード） =====
+/* 書き出しJSONの中身。ファイル書き出しと引き継ぎコードで共用する。 */
+function buildExportPayload() {
+  return {
+    app: 'daily-training',
+    schemaVersion: SCHEMA_VERSION,
+    exportedAt: formatDateJa(todayDate()),
+    exercises: state.exercises,
+    records: state.records,
+    settings: state.settings,
+    profile: state.profile,
+    rivals: state.rivals
+  };
+}
+
+/* 検証を通ったデータを現在のデータとして反映する。
+   ファイル読み込みと引き継ぎコード読み込みで共用する。反映前に自動で退避する（#26）。 */
+function applyImportedData(result) {
+  stashBackup();
+  state.exercises = result.data.exercises;
+  state.records = result.data.records;
+  state.settings = sanitizeSettings(Object.assign({}, result.data.settings, {
+    cardId: result.data.settings.cardId !== '' ? result.data.settings.cardId : state.settings.cardId
+  }));
+  if (result.data.profile !== null) state.profile = result.data.profile;
+  if (result.data.rivals !== null) state.rivals = result.data.rivals;
+  saveAll();
+  saveRivals();
+  saveProfile();
+  applyTheme();
+  renderAll();
+  if (el.restoreBackupBtn) el.restoreBackupBtn.hidden = false;
+}
+
+/* 引き継ぎコード（R15）: JSON文字列を UTF-8 → Base64 に変換する。
+   btoa は日本語を直接扱えないため、UTF-8バイト列を経由する純粋な実装にする。 */
+var BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+function utf8BytesOf(str) {
+  var bytes = [];
+  for (var i = 0; i < str.length; i++) {
+    var code = str.charCodeAt(i);
+    if (code < 0x80) {
+      bytes.push(code);
+    } else if (code < 0x800) {
+      bytes.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f));
+    } else if (code >= 0xd800 && code <= 0xdbff && i + 1 < str.length) {
+      var lo = str.charCodeAt(i + 1);
+      if (lo >= 0xdc00 && lo <= 0xdfff) {
+        var cp = 0x10000 + ((code - 0xd800) << 10) + (lo - 0xdc00);
+        bytes.push(0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3f), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
+        i += 1;
+      } else {
+        bytes.push(0xef, 0xbf, 0xbd);
+      }
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      bytes.push(0xef, 0xbf, 0xbd);
+    } else {
+      bytes.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+    }
+  }
+  return bytes;
+}
+
+function bytesToBase64(bytes) {
+  var out = '';
+  for (var i = 0; i < bytes.length; i += 3) {
+    var b0 = bytes[i];
+    var b1 = i + 1 < bytes.length ? bytes[i + 1] : 0;
+    var b2 = i + 2 < bytes.length ? bytes[i + 2] : 0;
+    out += BASE64_ALPHABET.charAt(b0 >> 2);
+    out += BASE64_ALPHABET.charAt(((b0 & 0x03) << 4) | (b1 >> 4));
+    out += i + 1 < bytes.length ? BASE64_ALPHABET.charAt(((b1 & 0x0f) << 2) | (b2 >> 6)) : '=';
+    out += i + 2 < bytes.length ? BASE64_ALPHABET.charAt(b2 & 0x3f) : '=';
+  }
+  return out;
+}
+
+function base64ToBytes(code) {
+  var cleaned = String(code).replace(/\s+/g, '');
+  if (cleaned === '' || cleaned.length % 4 !== 0) return null;
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(cleaned)) return null;
+  var bytes = [];
+  for (var i = 0; i < cleaned.length; i += 4) {
+    var c0 = BASE64_ALPHABET.indexOf(cleaned.charAt(i));
+    var c1 = BASE64_ALPHABET.indexOf(cleaned.charAt(i + 1));
+    var pad2 = cleaned.charAt(i + 2) === '=';
+    var pad3 = cleaned.charAt(i + 3) === '=';
+    var c2 = pad2 ? 0 : BASE64_ALPHABET.indexOf(cleaned.charAt(i + 2));
+    var c3 = pad3 ? 0 : BASE64_ALPHABET.indexOf(cleaned.charAt(i + 3));
+    if (c0 < 0 || c1 < 0 || c2 < 0 || c3 < 0) return null;
+    bytes.push((c0 << 2) | (c1 >> 4));
+    if (!pad2) bytes.push(((c1 & 0x0f) << 4) | (c2 >> 2));
+    if (!pad3) bytes.push(((c2 & 0x03) << 6) | c3);
+  }
+  return bytes;
+}
+
+/* UTF-8バイト列を文字列に戻す。不正な並びがあれば null。 */
+function utf8StringOf(bytes) {
+  var out = '';
+  var i = 0;
+  while (i < bytes.length) {
+    var b = bytes[i];
+    if (b < 0x80) {
+      out += String.fromCharCode(b);
+      i += 1;
+    } else if (b >= 0xc2 && b <= 0xdf && i + 1 < bytes.length && (bytes[i + 1] & 0xc0) === 0x80) {
+      out += String.fromCharCode(((b & 0x1f) << 6) | (bytes[i + 1] & 0x3f));
+      i += 2;
+    } else if (b >= 0xe0 && b <= 0xef && i + 2 < bytes.length &&
+               (bytes[i + 1] & 0xc0) === 0x80 && (bytes[i + 2] & 0xc0) === 0x80) {
+      out += String.fromCharCode(((b & 0x0f) << 12) | ((bytes[i + 1] & 0x3f) << 6) | (bytes[i + 2] & 0x3f));
+      i += 3;
+    } else if (b >= 0xf0 && b <= 0xf4 && i + 3 < bytes.length &&
+               (bytes[i + 1] & 0xc0) === 0x80 && (bytes[i + 2] & 0xc0) === 0x80 && (bytes[i + 3] & 0xc0) === 0x80) {
+      var cp = ((b & 0x07) << 18) | ((bytes[i + 1] & 0x3f) << 12) | ((bytes[i + 2] & 0x3f) << 6) | (bytes[i + 3] & 0x3f);
+      cp -= 0x10000;
+      out += String.fromCharCode(0xd800 + (cp >> 10), 0xdc00 + (cp & 0x3ff));
+      i += 4;
+    } else {
+      return null;
+    }
+  }
+  return out;
+}
+
+function encodeTransferCode(jsonText) {
+  return bytesToBase64(utf8BytesOf(jsonText));
+}
+
+function decodeTransferCode(code) {
+  if (typeof code !== 'string') return null;
+  var bytes = base64ToBytes(code);
+  if (bytes === null) return null;
+  return utf8StringOf(bytes);
+}
+
 // ===== イベント =====
 function initEvents() {
   /* 折りたたみ（今日: アドバイス／共有／履歴、マイページ: 月別グラフ／種目別累計／友達と競争） */
@@ -2144,12 +2952,18 @@ function initEvents() {
   setupCollapse('toggle-rivals', 'rivals-body');
 
   var navLabels = { today: '今日', menu: 'メニュー', mypage: 'マイページ', settings: '設定' };
-  var navEls = { today: el.navToday, menu: el.navMenu, mypage: el.navMypage, settings: el.navSettings };
-  VIEW_NAMES.forEach(function (name) {
-    if (!navEls[name]) return;
-    navEls[name].addEventListener('click', function () {
-      showView(name);
-      announce(navLabels[name] + 'の画面を表示しました');
+  /* 上部ナビと下部固定ナビ（R6）の両方に同じ切替を配線する */
+  var navPairs = [
+    ['today', el.navToday], ['today', el.navBottomToday],
+    ['menu', el.navMenu], ['menu', el.navBottomMenu],
+    ['mypage', el.navMypage], ['mypage', el.navBottomMypage],
+    ['settings', el.navSettings], ['settings', el.navBottomSettings]
+  ];
+  navPairs.forEach(function (pair) {
+    if (!pair[1]) return;
+    pair[1].addEventListener('click', function () {
+      showView(pair[0]);
+      announce(navLabels[pair[0]] + 'の画面を表示しました');
     });
   });
 
@@ -2191,14 +3005,74 @@ function initEvents() {
     el.undoDeleteBtn.addEventListener('click', undoDelete);
   }
 
+  /* 開始プリセット（R12） */
+  if (el.presetFullBtn) {
+    el.presetFullBtn.addEventListener('click', function () {
+      state.prefs.startPresetDone = true;
+      savePrefs();
+      renderToday();
+      announce('今の6種目のまま始めます');
+    });
+  }
+  if (el.presetLightBtn) {
+    el.presetLightBtn.addEventListener('click', function () {
+      /* ライト: 腕立て・クランチ・プランクの3種目だけにし、各1セットにする。
+         外した種目はテンプレートや追加フォームからいつでも戻せる。 */
+      var keepIds = ['ex-pushup', 'ex-crunch', 'ex-plank'];
+      state.exercises = state.exercises.filter(function (ex) {
+        return keepIds.indexOf(ex.id) !== -1;
+      });
+      state.exercises.forEach(function (ex) { ex.sets = 1; });
+      presetJustLightened = true;
+      saveExercises();
+      renderAll();
+      showToast('保存しました');
+      announce('ライトにしました。腕立て・クランチ・プランクの各1セットだけになりました');
+    });
+  }
+  if (el.presetOkBtn) {
+    el.presetOkBtn.addEventListener('click', function () {
+      presetJustLightened = false;
+      state.prefs.startPresetDone = true;
+      savePrefs();
+      renderToday();
+    });
+  }
+
+  /* 一括完了（R4） */
+  if (el.allDoneBtn) {
+    el.allDoneBtn.addEventListener('click', completeAllToday);
+  }
+  if (el.completeUndoBtn) {
+    el.completeUndoBtn.addEventListener('click', undoCompleteAll);
+  }
+
+  /* まとめて編集（R3） */
+  if (el.bulkEditBtn) {
+    el.bulkEditBtn.addEventListener('click', function () {
+      bulkEditMode = true;
+      editingExerciseId = null;
+      renderManage();
+      announce('まとめて編集モードにしました');
+    });
+  }
+  if (el.bulkSaveBtn) {
+    el.bulkSaveBtn.addEventListener('click', saveBulkEdit);
+  }
+  if (el.bulkCancelBtn) {
+    el.bulkCancelBtn.addEventListener('click', cancelBulkEdit);
+  }
+
   el.mpYear.addEventListener('change', function () {
     mypageSel.year = toInt(el.mpYear.value, todayDate().getFullYear(), 1, 9999);
+    calendarEditKey = null;
     persistMypageSel();
     renderMypage();
   });
 
   el.mpMonth.addEventListener('change', function () {
     mypageSel.month = toInt(el.mpMonth.value, todayDate().getMonth(), 0, 11);
+    calendarEditKey = null;
     persistMypageSel();
     renderMypage();
   });
@@ -2239,6 +3113,7 @@ function initEvents() {
     renderProfile();
     renderRivals();
     el.profileStatus.textContent = 'プロフィールを保存しました。';
+    showToast('保存しました');
     announce('プロフィールを保存しました');
   });
 
@@ -2391,6 +3266,7 @@ function initEvents() {
     saveRecords();
     renderToday();
     renderHistory();
+    showToast('保存しました');
     /* 短縮の影響を状態メッセージでも知らせる（#11） */
     announce(short
       ? '短縮モードをオンにしました。今日の目標は各種目' + state.settings.shortGoalSets + 'セットになります'
@@ -2448,6 +3324,19 @@ function initEvents() {
     renderToday();
   });
 
+  /* 追加フォームの完成形の例（R16）: 入力に合わせて更新する */
+  function updateAddExample() {
+    if (!el.addExample) return;
+    var name = document.getElementById('add-name').value.trim() || '種目';
+    var amount = document.getElementById('add-amount').value || '20';
+    var unit = document.getElementById('add-unit').value;
+    var sets = document.getElementById('add-sets').value || '2';
+    el.addExample.textContent = '例: ' + name + ' ' + amount + unit + ' × ' + sets + 'セット';
+  }
+  el.addForm.addEventListener('input', updateAddExample);
+  el.addForm.addEventListener('change', updateAddExample);
+  updateAddExample();
+
   el.addForm.addEventListener('submit', function (event) {
     event.preventDefault();
     var name = document.getElementById('add-name').value.trim();
@@ -2465,21 +3354,16 @@ function initEvents() {
     el.addForm.reset();
     document.getElementById('add-amount').value = '20';
     document.getElementById('add-sets').value = '2';
+    updateAddExample();
     renderAll();
+    showToast('保存しました');
     announce(ex.name + 'を追加しました');
+    /* 追加した種目が見える位置へスクロールする（R11） */
+    scrollToExerciseRow(ex.id);
   });
 
   el.exportBtn.addEventListener('click', function () {
-    var payload = {
-      app: 'daily-training',
-      schemaVersion: SCHEMA_VERSION,
-      exportedAt: formatDateJa(todayDate()),
-      exercises: state.exercises,
-      records: state.records,
-      settings: state.settings,
-      profile: state.profile,
-      rivals: state.rivals
-    };
+    var payload = buildExportPayload();
     var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
@@ -2526,25 +3410,83 @@ function initEvents() {
         return;
       }
       /* 現在のデータを自動で退避してから差し替える（#26） */
-      stashBackup();
-      state.exercises = result.data.exercises;
-      state.records = result.data.records;
-      state.settings = sanitizeSettings(Object.assign({}, result.data.settings, {
-        cardId: result.data.settings.cardId !== '' ? result.data.settings.cardId : state.settings.cardId
-      }));
-      if (result.data.profile !== null) state.profile = result.data.profile;
-      if (result.data.rivals !== null) state.rivals = result.data.rivals;
-      saveAll();
-      saveRivals();
-      saveProfile();
-      applyTheme();
-      renderAll();
-      if (el.restoreBackupBtn) el.restoreBackupBtn.hidden = false;
+      applyImportedData(result);
       el.dataStatus.textContent = 'インポートしました。読み込む前のデータは自動で退避しました（下のボタンから戻せます）。';
       el.importFile.value = '';
     };
     reader.readAsText(file);
   });
+
+  /* 引き継ぎコード（R15）: 書き出しJSONと同じ内容を Base64 の文字列で受け渡す。
+     読み込みは JSON ファイルと同じ検証・上限を通す。 */
+  if (el.transferShowBtn) {
+    el.transferShowBtn.addEventListener('click', function () {
+      el.transferCodeOut.value = encodeTransferCode(JSON.stringify(buildExportPayload()));
+      el.transferCodeOut.hidden = false;
+      /* コードの表示も書き出しの一種として、最終書き出し日を更新する（#26） */
+      state.prefs.exportLastAt = formatDateJa(todayDate());
+      savePrefs();
+      if (el.lastExport) el.lastExport.textContent = '最後に書き出した日: ' + state.prefs.exportLastAt;
+      el.dataStatus.textContent = '引き継ぎコードを表示しました。コピーして、新しい端末で貼り付けてください。';
+    });
+  }
+  if (el.transferCopyBtn) {
+    el.transferCopyBtn.addEventListener('click', function () {
+      if (el.transferCodeOut.hidden || el.transferCodeOut.value === '') {
+        el.transferCodeOut.value = encodeTransferCode(JSON.stringify(buildExportPayload()));
+        el.transferCodeOut.hidden = false;
+      }
+      var code = el.transferCodeOut.value;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(code).then(function () {
+          el.dataStatus.textContent = '引き継ぎコードをクリップボードにコピーしました。';
+          announce('引き継ぎコードをコピーしました');
+        }, function () {
+          el.dataStatus.textContent = 'コピーできませんでした。コードの欄から手動でコピーしてください。';
+        });
+      } else {
+        el.dataStatus.textContent = 'この環境ではコピーできません。コードの欄から手動でコピーしてください。';
+      }
+    });
+  }
+  if (el.transferLoadBtn) {
+    el.transferLoadBtn.addEventListener('click', function () {
+      var code = el.transferCodeIn.value.trim();
+      if (code === '') {
+        el.dataStatus.textContent = '引き継ぎコードを貼り付けてください。';
+        return;
+      }
+      /* サイズ上限はJSONインポートと同じ（#28）。Base64は元の約4/3倍になる */
+      if (code.length > Math.ceil(FILE_LIMITS.jsonBytes * 4 / 3) + 1024) {
+        el.dataStatus.textContent = '読み込めませんでした: コードが長すぎます（データの上限は5MBです）。';
+        return;
+      }
+      var jsonText = decodeTransferCode(code);
+      if (jsonText === null) {
+        el.dataStatus.textContent = '読み込めませんでした: 引き継ぎコードとして読めませんでした。コード全体を貼り付けたか確認してください。';
+        return;
+      }
+      var parsed = null;
+      try {
+        parsed = JSON.parse(jsonText);
+      } catch (e) {
+        parsed = null;
+      }
+      if (parsed === null) {
+        el.dataStatus.textContent = '読み込めませんでした: データとして読めませんでした。';
+        return;
+      }
+      var result = validateImportData(parsed);
+      if (!result.ok) {
+        el.dataStatus.textContent = '読み込めませんでした: ' + result.error;
+        return;
+      }
+      applyImportedData(result);
+      el.transferCodeIn.value = '';
+      el.dataStatus.textContent = '引き継ぎコードから読み込みました。読み込む前のデータは自動で退避しました（下のボタンから戻せます）。';
+      announce('引き継ぎコードから読み込みました');
+    });
+  }
 
   if (el.restoreBackupBtn) {
     el.restoreBackupBtn.addEventListener('click', function () {
@@ -2559,18 +3501,9 @@ function initEvents() {
         el.dataStatus.textContent = '退避データが壊れているため、戻せませんでした: ' + result.error;
         return;
       }
-      state.exercises = result.data.exercises;
-      state.records = result.data.records;
-      state.settings = sanitizeSettings(Object.assign({}, result.data.settings, {
-        cardId: result.data.settings.cardId !== '' ? result.data.settings.cardId : state.settings.cardId
-      }));
-      if (result.data.profile !== null) state.profile = result.data.profile;
-      if (result.data.rivals !== null) state.rivals = result.data.rivals;
-      saveAll();
-      saveRivals();
-      saveProfile();
-      applyTheme();
-      renderAll();
+      /* applyImportedData は復元前の現在データを退避し直すので、
+         復元を取り消して元のデータに戻すこともできる */
+      applyImportedData(result);
       el.dataStatus.textContent = '退避したデータに戻しました。';
     });
   }
@@ -2590,7 +3523,12 @@ function initEvents() {
     } catch (e) { /* そのまま初期化する */ }
     editingExerciseId = null;
     editingHistoryKey = null;
+    calendarEditKey = null;
+    bulkEditMode = false;
+    presetJustLightened = false;
+    prevTodayComplete = null;
     hideUndoBar();
+    hideCompleteUndo();
     initState();
     initMypageSel();
     saveAll();

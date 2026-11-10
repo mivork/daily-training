@@ -300,6 +300,157 @@ function completeRecord() {
   eq('既存種目の目標は変わらない', third.targets['ex-a'], 2);
 })();
 
+/* ---------- (h) R9: スキップした種目は完了条件と集計から外れる ---------- */
+(function () {
+  api.state.exercises = [
+    { id: 'ex-a', name: '種目A', amount: 10, unit: '回', sets: 2, note: '' },
+    { id: 'ex-b', name: '種目B', amount: 10, unit: '回', sets: 2, note: '' }
+  ];
+  api.state.settings.trainingWeekdays = [0, 1, 2, 3, 4, 5, 6];
+  api.state.settings.shortWeekdays = [];
+  api.state.records = {};
+  const today = api.todayDate();
+  const key = keyOf(today);
+  api.state.records[key] = {
+    done: { 'ex-a': 2, 'ex-b': 2 },
+    skipped: { 'ex-b': true },
+    short: false,
+    dayType: 'training',
+    targets: { 'ex-a': 2, 'ex-b': 2 },
+    names: { 'ex-a': '種目A', 'ex-b': '種目B' },
+    amounts: { 'ex-a': 10, 'ex-b': 10 },
+    units: { 'ex-a': '回', 'ex-b': '回' }
+  };
+  const stats = api.dayStats(key);
+  eq('スキップした種目は完了率の分母から外れる', stats.totalTarget, 2);
+  eq('スキップした種目の完了分は数えない', stats.totalDone, 2);
+  eq('残りが完了していれば、スキップがあってもその日は完了', stats.complete, true);
+  eq('スキップ件数', stats.skippedCount, 1);
+  eq('entry の skipped フラグ', stats.entries[1].skipped, true);
+  eq('スキップした種目の countedDone は 0', stats.entries[1].countedDone, 0);
+
+  const period = api.periodStats(today, today);
+  eq('期間集計の完了セット数にスキップ分は入らない', period.sets, 2);
+  eq('期間集計の合計回数にスキップ分は入らない', period.reps, 20);
+
+  /* 全部スキップでも、その日は完了として扱う */
+  api.state.records[key].done = { 'ex-a': 0, 'ex-b': 0 };
+  api.state.records[key].skipped = { 'ex-a': true, 'ex-b': true };
+  const allSkipped = api.dayStats(key);
+  eq('全種目スキップなら完了', allSkipped.complete, true);
+  eq('全種目スキップなら完了率100%', allSkipped.rate, 100);
+
+  /* skipped の無い旧記録でも壊れない（後方互換） */
+  delete api.state.records[key].skipped;
+  api.state.records[key].done = { 'ex-a': 2, 'ex-b': 1 };
+  const legacy = api.dayStats(key);
+  eq('skipped の無い旧記録は従来どおり集計', legacy.totalTarget, 4);
+  eq('skipped の無い旧記録は未完了', legacy.complete, false);
+})();
+
+/* ---------- (i) R15: 引き継ぎコードの変換 ---------- */
+(function () {
+  const original = JSON.stringify({ app: 'daily-training', note: '日本語のデータ 🎉', n: 42 });
+  const code = api.encodeTransferCode(original);
+  check('コードは Base64 文字だけでできている', /^[A-Za-z0-9+/=]+$/.test(code));
+  eq('日本語を含むJSONが往復で戻る', api.decodeTransferCode(code), original);
+  eq('空白や改行が混ざっても読める', api.decodeTransferCode(code.slice(0, 8) + '\n' + code.slice(8)), original);
+  eq('Base64でない文字列は null', api.decodeTransferCode('これはコードではありません!!!'), null);
+  eq('空文字は null', api.decodeTransferCode(''), null);
+  eq('文字列でないものは null', api.decodeTransferCode(null), null);
+})();
+
+/* ---------- (j) インポート検証: skipped の形式 ---------- */
+(function () {
+  const withSkip = {
+    exercises: [],
+    records: { '2026-01-05': { done: {}, short: false, skipped: { 'ex-a': true } } }
+  };
+  eq('skipped（真偽値）は検証を通る', api.validateImportData(withSkip).ok, true);
+  const badSkip = {
+    exercises: [],
+    records: { '2026-01-05': { done: {}, skipped: { 'ex-a': 'yes' } } }
+  };
+  eq('skipped の値が真偽値でないとエラー', api.validateImportData(badSkip).ok, false);
+})();
+
+/* ---------- (k) R4: すべて完了と元に戻す ---------- */
+(function () {
+  api.state.exercises = [
+    { id: 'ex-a', name: '種目A', amount: 10, unit: '回', sets: 2, note: '' },
+    { id: 'ex-b', name: '種目B', amount: 5, unit: '秒', sets: 1, note: '' }
+  ];
+  api.state.settings.shortWeekdays = [];
+  api.state.records = {};
+  api.completeAllToday();
+  const key = keyOf(api.todayDate());
+  const record = api.getRecord(key);
+  check('すべて完了で記録が作られる', record !== null);
+  eq('種目Aは目標どおり完了', record && record.done['ex-a'], 2);
+  eq('種目Bは目標どおり完了', record && record.done['ex-b'], 1);
+  eq('すべて完了後はその日が完了', api.dayStats(key).complete, true);
+  api.undoCompleteAll();
+  eq('元に戻すと記録自体が無かったことになる', api.getRecord(key), null);
+})();
+
+/* ---------- (l) R2: 種目テンプレート ---------- */
+(function () {
+  check('テンプレートは10件ある', api.EXERCISE_TEMPLATES.length >= 10);
+  const names = api.EXERCISE_TEMPLATES.map(function (t) { return t.name; });
+  eq('テンプレートの名前は重複しない', new Set(names).size, names.length);
+  const allValid = api.EXERCISE_TEMPLATES.every(function (t) {
+    return api.sanitizeExercise(JSON.parse(JSON.stringify(t))) !== null;
+  });
+  check('テンプレートはすべて種目として整形できる', allValid);
+})();
+
+/* ---------- (m) R8: 今日の目標への反映 ---------- */
+(function () {
+  api.state.exercises = [{ id: 'ex-a', name: 'テスト種目', amount: 10, unit: '回', sets: 2, note: '' }];
+  api.state.records = {};
+  const record = api.ensureTodayRecord(false);
+  record.done['ex-a'] = 1;
+  const applied = api.reflectEditsToToday([{ id: 'ex-a', name: 'テスト種目', amount: 15, unit: '回', sets: 3 }]);
+  eq('今日の記録があれば反映できる', applied, true);
+  eq('今日の目標セット数が新しい値になる', record.targets['ex-a'], 3);
+  eq('今日の目標の数値が新しい値になる', record.amounts['ex-a'], 15);
+  eq('完了済みセット数は変わらない', record.done['ex-a'], 1);
+  eq('スナップショットに無い種目は反映対象外',
+    api.reflectEditsToToday([{ id: 'ex-zzz', name: '不明', amount: 1, unit: '回', sets: 1 }]), false);
+  api.state.records = {};
+  eq('今日の記録が無ければ反映しない',
+    api.reflectEditsToToday([{ id: 'ex-a', name: 'テスト種目', amount: 15, unit: '回', sets: 3 }]), false);
+})();
+
+/* ---------- (n) R3: まとめて編集の保存 ---------- */
+(function () {
+  api.state.exercises = [
+    { id: 'ex-a', name: '種目A', amount: 10, unit: '回', sets: 2, note: '' },
+    { id: 'ex-b', name: '種目B', amount: 5, unit: '秒', sets: 1, note: 'メモ' }
+  ];
+  api.state.records = {};
+  api.bulkEditMode = true;
+  api.renderManage();
+  check('まとめて編集の入力欄が作られる', !!api.bulkInputs['ex-a']);
+  api.bulkInputs['ex-a'].amount.value = '25';
+  api.bulkInputs['ex-a'].sets.value = '4';
+  api.bulkInputs['ex-b'].unit.value = '回';
+  api.saveBulkEdit();
+  eq('まとめて保存で数値が変わる', api.state.exercises[0].amount, 25);
+  eq('まとめて保存でセット数が変わる', api.state.exercises[0].sets, 4);
+  eq('まとめて保存で単位が変わる', api.state.exercises[1].unit, '回');
+  eq('まとめて保存で名前とメモは変わらない', api.state.exercises[1].note, 'メモ');
+  eq('保存後はまとめて編集モードを抜ける', api.bulkEditMode, false);
+})();
+
+/* ---------- (o) R12: 初期メニューの判定 ---------- */
+(function () {
+  api.state.exercises = JSON.parse(JSON.stringify(api.SEED_EXERCISES));
+  eq('初期の6種目のままなら true', api.isInitialMenu(), true);
+  api.state.exercises.pop();
+  eq('1つ外すと false', api.isInitialMenu(), false);
+})();
+
 console.log('');
 console.log(passed + ' passed, ' + failed + ' failed');
 process.exit(failed === 0 ? 0 : 1);
